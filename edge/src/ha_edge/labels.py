@@ -9,14 +9,14 @@ YAMNET_LABELS: dict[str, tuple[str, ...]] = {
     "shouting": ("Shout", "Yell", "Bellow"),
     "crying": ("Crying, sobbing", "Baby cry, infant cry", "Whimper"),
     # Grunt omitted: too common in everyday exertion.
-    "moaning": ("Groan"),
+    "moaning": ("Groan",),
     # Breathing omitted: fires on normal breathing.
     "gasping": ("Gasp", "Wheeze"),
     "coughing": ("Cough",),
     # Breaking omitted: matches any breaking object.
     "glass_breaking": ("Glass", "Shatter"),
     # Door omitted: matches every door sound.
-    "door_slam": ("Slam"),
+    "door_slam": ("Slam",),
     "knocking": ("Knock",),
     "car_alarm": ("Car alarm",),
     # Dog omitted: matches panting and whining, not just barking.
@@ -31,7 +31,7 @@ YAMNET_LABELS: dict[str, tuple[str, ...]] = {
         "Civil defense siren",
     ),
     # Bang omitted: matches routine knocks and pops.
-    "explosion": ("Explosion"),
+    "explosion": ("Explosion",),
     "running_water": (
         "Water tap, faucet",
         "Sink (filling or washing)",
