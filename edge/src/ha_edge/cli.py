@@ -1,6 +1,6 @@
 """Console entry points: ``ha-sensor`` and ``ha-agent``.
 
-The device key, the agent's password and its access token are never printed or logged.
+The device key, the agent's password and its tokens are never printed or logged.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import contextlib
 import getpass
 import logging
 import signal
+import socket
 import sys
 import time
 from collections.abc import Sequence
@@ -250,21 +251,45 @@ def _finish_login(http: Any, base: str, email: str, r: Any) -> int:
     if r.status_code == 429:
         _err("Login failed: Too many attempts. Wait a minute and try again.")
         return EXIT_USAGE
-    token = None
+    jwt = None
     if r.status_code == 200:
         with contextlib.suppress(ValueError, AttributeError):
-            token = r.json().get("access_token")
-    if not isinstance(token, str) or not token:
+            jwt = r.json().get("access_token")
+    if not isinstance(jwt, str) or not jwt:
         _err(f"Login failed: unexpected server response (HTTP {r.status_code}).")
+        return EXIT_ERROR
+    auth = {"Authorization": f"Bearer {jwt}"}
+    # Swap the 24 h session for a long-lived, revocable agent token; only that is stored.
+    host = socket.gethostname().strip()[:90] or "this laptop"
+    try:
+        t = http.post(f"{base}/me/agent-tokens", json={"name": f"{host} agent"}, headers=auth)
+    except httpx.HTTPError as e:
+        _err(f"Login failed: cannot reach the server at {base} ({type(e).__name__}).")
+        return EXIT_ERROR
+    if t.status_code == 409:
+        _err(
+            "Login failed: this account already has 10 agent tokens. Revoke one you no longer "
+            "use (DELETE /me/agent-tokens/{id}) and try again."
+        )
+        return EXIT_USAGE
+    if t.status_code == 429:
+        _err("Login failed: Too many attempts. Wait a minute and try again.")
+        return EXIT_USAGE
+    agent_token = None
+    if t.status_code == 201:
+        with contextlib.suppress(ValueError, AttributeError):
+            agent_token = t.json().get("token")
+    if not isinstance(agent_token, str) or not agent_token:
+        _err(f"Login failed: unexpected server response (HTTP {t.status_code}).")
         return EXIT_ERROR
     # member_id lets the agent recognise its own acks; without it, it compares emails.
     member_id = None
     with contextlib.suppress(httpx.HTTPError, ValueError, AttributeError):
-        me = http.get(f"{base}/auth/me", headers={"Authorization": f"Bearer {token}"})
+        me = http.get(f"{base}/auth/me", headers=auth)
         if me.status_code == 200:
             mid = me.json().get("id")
             member_id = mid if isinstance(mid, int) and not isinstance(mid, bool) else None
-    config.save_agent(config.AgentConfig(base, email, token, member_id))
+    config.save_agent(config.AgentConfig(base, email, member_id=member_id, agent_token=agent_token))
     print(f"Logged in as {email}. Now run `ha-agent run`.")
     return EXIT_OK
 
@@ -279,13 +304,16 @@ def _cmd_agent_run(args: argparse.Namespace) -> int:
     except config.ConfigError as e:
         _err(str(e))
         return EXIT_USAGE
-    if cfg is None:
+    if cfg is None or not cfg.bearer_token:
         _err("Not logged in. Run `ha-agent login --server URL --email EMAIL` first.")
         return EXIT_NOT_LOGGED_IN
     _setup_logging()
-    from datetime import UTC, datetime
+    if cfg.agent_token is None:
+        # A config saved before agent tokens: a 24 h JWT. Keep working, but say how to stop it.
+        from datetime import UTC, datetime
 
-    agent.log_login_expiry(cfg.access_token, datetime.now(UTC))
+        _err("This login expires daily: re-run `ha-agent login` to stop daily logins.")
+        agent.log_login_expiry(cfg.access_token, datetime.now(UTC))
 
     async def main() -> int:
         stop = asyncio.Event()
@@ -338,7 +366,9 @@ def _cmd_test_alarm(args: argparse.Namespace) -> int:
 def agent_main(argv: Sequence[str] | None = None) -> int:
     parser = _parser("ha-agent", "Show Home Awareness alerts on this laptop.")
     sub = parser.add_subparsers(dest="command", required=True)
-    lg = sub.add_parser("login", help="log in; stores only an access token (valid 24 h)")
+    lg = sub.add_parser(
+        "login", help="log in; stores only a long-lived, revocable agent token (not the password)"
+    )
     lg.add_argument("--server", required=True, help="server URL, e.g. https://example.org")
     lg.add_argument("--email", required=True, help="your Home Awareness email")
     sub.add_parser("run", help="show alerts as popups and sound the alarm")

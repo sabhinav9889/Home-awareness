@@ -176,7 +176,8 @@ class _Agent:
         return isinstance(by, str) and by.casefold() == self.cfg.email.casefold()
 
     def _redact(self, text: str) -> str:
-        return text.replace(self.cfg.access_token, "***") if self.cfg.access_token else text
+        token = self.cfg.bearer_token
+        return text.replace(token, "***") if token else text
 
     def spawn(self, coro: Awaitable[Any]) -> None:
         task = asyncio.ensure_future(coro)
@@ -275,7 +276,7 @@ class _Agent:
 
     async def ack(self, alert_id: Any) -> None:
         url = f"{self.base}/alerts/{alert_id}/ack"
-        headers = {"Authorization": f"Bearer {self.cfg.access_token}"}
+        headers = {"Authorization": f"Bearer {self.cfg.bearer_token}"}
         try:
             r = await self.http.post(url, headers=headers, timeout=10)
         except httpx.HTTPError as e:
@@ -359,7 +360,7 @@ async def _connection_loop(
     sleep: Callable[[float], Awaitable[Any]],
     rand: Callable[[], float],
 ) -> int:
-    url = f"{agent.base}/ws?token={quote(agent.cfg.access_token, safe='')}"
+    url = f"{agent.base}/ws?token={quote(agent.cfg.bearer_token or '', safe='')}"
     failures = 0
     while True:
         connected_at: float | None = None

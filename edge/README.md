@@ -91,12 +91,19 @@ most in a row).
     uv run ha-agent run          # Ctrl-C (or SIGTERM) stops any alarm and exits 0
     uv run ha-agent test-alarm   # plays the alarm for 3 s
 
-- `login` stores only the access token and your member id in `agent.json`; the password is never
-  stored, printed or logged, and neither is the token.
-- **Log in again every 24 hours.** The stored login is the normal 24 h access token (until
-  dedicated agent tokens land). When it runs out, alerts stop reaching this laptop: `run`
-  says when it expires on start, warns when less than 2 h are left, and exits 6 with
-  "Please log in again" once the server rejects it.
+- `login` signs in with your password once, then creates a long-lived **agent token**
+  (named "`<hostname>` agent") and stores only that token and your member id in
+  `agent.json` (mode 0600). The password and the short-lived login are never stored, and
+  no token is ever printed or logged. You do not need to log in again every day.
+- The agent token is narrow: it only opens the live alert connection and sends "I'm on it".
+  Every other API call refuses it. Each account can have up to 10 active agent tokens.
+- **Revoke** a laptop's token (lost laptop, uninstall) until the dashboard has a button:
+  `GET /me/agent-tokens` lists them (id, name, last used), and
+  `DELETE /me/agent-tokens/{id}` revokes one, both with a normal login's bearer token. A
+  revoked token's open connection keeps running until it next reconnects; that reconnect
+  is refused and `run` exits 6.
+- Configs saved by older versions (a 24 h login) still work until they expire; `run` then
+  prints "re-run `ha-agent login` to stop daily logins".
 - Popup buttons: **I'm on it** (acknowledges for the household and stops the alarm) and,
   on alarm alerts, **Stop alarm** (either one silences the alarm). Popup-only alerts show
   just **I'm on it**. When someone acknowledges an alert you
@@ -112,8 +119,8 @@ most in a row).
   without button support, the alarm stops after its 30 s (3 minutes at most in a row, see
   above) or on Ctrl-C.
 - The alarm needs PipeWire's `pw-play`. If the default output is muted, you won't hear it.
-- When the token expires or you are removed from the household, `run` shows
-  "Please log in again: ha-agent login" and exits 6. Other disconnects reconnect with
-  backoff 1, 2, 4 … 60 s (±20 % jitter).
+- When the token is revoked (or an old 24 h login expires) or you are removed from the
+  household, `run` shows "Please log in again: ha-agent login" and exits 6. Other
+  disconnects reconnect with backoff 1, 2, 4 … 60 s (±20 % jitter).
 
 Exit codes: 0 ok, 1 network/audio error, 2 usage or login rejected, 3 not logged in, 6 log in again.

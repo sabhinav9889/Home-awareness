@@ -57,3 +57,26 @@ def test_config_dir_default_uses_platformdirs(monkeypatch):
 def test_new_config_dir_is_private(cfg_dir):
     config.save_agent(AgentConfig("http://x", "a@b.c", "tok"))
     assert stat.S_IMODE(os.stat(cfg_dir).st_mode) == 0o700
+
+
+def test_agent_config_stores_only_the_token_it_has(cfg_dir):
+    config.save_agent(AgentConfig("http://x", "a@b.c", member_id=4, agent_token="ha_agent_t"))
+    raw = json.loads((cfg_dir / "agent.json").read_text())
+    assert raw == {
+        "base_url": "http://x",
+        "email": "a@b.c",
+        "member_id": 4,
+        "agent_token": "ha_agent_t",
+    }
+    loaded = config.load_agent()
+    assert loaded.agent_token == "ha_agent_t" and loaded.access_token is None
+    assert loaded.bearer_token == "ha_agent_t"
+
+
+def test_legacy_jwt_config_loads_and_is_the_bearer(cfg_dir):
+    cfg_dir.mkdir()
+    (cfg_dir / "agent.json").write_text(
+        json.dumps({"base_url": "http://x", "email": "a@b.c", "access_token": "jwt"})
+    )
+    loaded = config.load_agent()
+    assert loaded.agent_token is None and loaded.bearer_token == "jwt"

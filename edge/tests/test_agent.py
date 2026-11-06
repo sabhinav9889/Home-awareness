@@ -749,3 +749,46 @@ def test_log_login_expiry_unreadable_token_says_nothing_secret(caplog):
     caplog.set_level(logging.DEBUG)
     log_login_expiry(TOKEN, NOW_TS)
     assert TOKEN not in caplog.text
+
+
+AGENT_CFG = AgentConfig(
+    base_url="http://srv", email="me@example.com", agent_token="ha_agent_xyz", member_id=1
+)
+
+
+@respx.mock
+async def test_agent_token_is_used_for_socket_and_ack_over_legacy_jwt():
+    route = respx.post("http://srv/alerts/7/ack").mock(
+        return_value=httpx.Response(200, json={"alert_id": 7})
+    )
+    cfg = AgentConfig(
+        base_url="http://srv",
+        email="me@example.com",
+        access_token=TOKEN,
+        member_id=1,
+        agent_token="ha_agent_xyz",
+    )
+    server = FakeServer(([ALERT], HANG))
+    notifier, alarm = FakeNotifier({TITLE: "I'm on it"}), FakeAlarm()
+    stop, task = _start(server, notifier, alarm, cfg=cfg)
+    await _until(lambda: route.called)
+    assert server.urls[0] == "http://srv/ws?token=ha_agent_xyz"
+    assert route.calls[0].request.headers["authorization"] == "Bearer ha_agent_xyz"
+    stop.set()
+    await task
+
+
+async def test_errors_never_log_the_agent_token(caplog):
+    caplog.set_level(logging.DEBUG)
+    slept = []
+
+    async def sleep(s):
+        slept.append(s)
+
+    err = httpx.ConnectError("cannot reach http://srv/ws?token=ha_agent_xyz")
+    server = FakeServer((err, None))
+    stop, task = _start(server, FakeNotifier(), FakeAlarm(), sleep=sleep, cfg=AGENT_CFG)
+    await _until(lambda: slept)
+    stop.set()
+    await task
+    assert "ha_agent_xyz" not in "\n".join(r.getMessage() for r in caplog.records)

@@ -225,13 +225,25 @@ PASSWORD = "hunter2-very-secret"
 JWT = "header.payload.sig-agent-token"
 
 
+AGENT_TOKEN = "ha_agent_long-lived-secret-abc"
+
+
+def _mock_agent_token(status=201, json_body=None):
+    body = {"id": 9, "token": AGENT_TOKEN} if json_body is None else json_body
+    return respx.post("http://srv/me/agent-tokens").mock(
+        return_value=httpx.Response(status, json=body)
+    )
+
+
 @respx.mock
-def test_agent_login_stores_token_not_password(cfgdir, monkeypatch, capsys, caplog):
+def test_agent_login_stores_agent_token_not_password_or_jwt(cfgdir, monkeypatch, capsys, caplog):
     caplog.set_level(logging.DEBUG)
     monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": PASSWORD)
+    monkeypatch.setattr(cli.socket, "gethostname", lambda: "kitchen-laptop")
     route = respx.post("http://srv/auth/login").mock(
         return_value=httpx.Response(200, json={"access_token": JWT, "token_type": "bearer"})
     )
+    mint = _mock_agent_token()
     me = respx.get("http://srv/auth/me").mock(
         return_value=httpx.Response(
             200, json={"id": 41, "email": "me@example.com", "role": "owner", "household_id": 2}
@@ -243,22 +255,47 @@ def test_agent_login_stores_token_not_password(cfgdir, monkeypatch, capsys, capl
         "email": "me@example.com",
         "password": PASSWORD,
     }
+    assert json.loads(mint.calls[0].request.content) == {"name": "kitchen-laptop agent"}
+    assert mint.calls[0].request.headers["authorization"] == f"Bearer {JWT}"
     path = cfgdir / "agent.json"
     raw = path.read_text()
-    assert PASSWORD not in raw
+    assert PASSWORD not in raw and JWT not in raw
     assert json.loads(raw) == {
         "base_url": "http://srv",
         "email": "me@example.com",
-        "access_token": JWT,
         "member_id": 41,
+        "agent_token": AGENT_TOKEN,
     }
     assert me.calls[0].request.headers["authorization"] == f"Bearer {JWT}"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     out = capsys.readouterr()
     logs = "\n".join(r.getMessage() for r in caplog.records)
-    for secret in (JWT, PASSWORD):
+    for secret in (JWT, PASSWORD, AGENT_TOKEN):
         assert secret not in out.out + out.err + logs
     assert "me@example.com" in out.out
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "rc", "msg"),
+    [
+        (409, {"detail": "too many"}, 2, "Revoke one"),
+        (429, {}, 2, "Too many"),
+        (500, {}, 1, "HTTP 500"),
+        (201, {"id": 9}, 1, "unexpected"),
+    ],
+)
+@respx.mock
+def test_agent_login_cannot_create_agent_token(cfgdir, monkeypatch, capsys, status, body, rc, msg):
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": PASSWORD)
+    respx.post("http://srv/auth/login").mock(
+        return_value=httpx.Response(200, json={"access_token": JWT, "token_type": "bearer"})
+    )
+    _mock_agent_token(status, body)
+    assert cli.agent_main(["login", "--server", "http://srv", "--email", "a@b.c"]) == rc
+    out = capsys.readouterr()
+    assert msg in out.err
+    assert JWT not in out.out + out.err
+    assert not (cfgdir / "agent.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -300,7 +337,7 @@ def test_agent_run_not_logged_in(cfgdir, capsys):
 def test_agent_run_passes_through_relogin_exit(cfgdir, monkeypatch, capsys):
     from ha_edge import agent
 
-    config.save_agent(config.AgentConfig("http://srv", "a@b.c", JWT))
+    config.save_agent(config.AgentConfig("http://srv", "a@b.c", agent_token=AGENT_TOKEN))
     seen = {}
 
     async def fake_run_agent(cfg, **kw):
@@ -310,11 +347,49 @@ def test_agent_run_passes_through_relogin_exit(cfgdir, monkeypatch, capsys):
 
     monkeypatch.setattr(agent, "run_agent", fake_run_agent)
     assert cli.agent_main(["run"]) == 6
-    assert seen["cfg"].access_token == JWT
+    assert seen["cfg"].agent_token == AGENT_TOKEN
     assert {"connect", "notifier", "alarm", "clock", "http", "stop"} <= set(seen["kw"])
     out = capsys.readouterr()
-    assert JWT not in out.out + out.err
+    assert AGENT_TOKEN not in out.out + out.err
     assert "ha-agent login" in out.err
+
+
+def test_agent_run_with_agent_token_has_no_expiry_warning_or_hint(
+    cfgdir, monkeypatch, capsys, caplog
+):
+    from ha_edge import agent
+
+    config.save_agent(config.AgentConfig("http://srv", "a@b.c", agent_token=AGENT_TOKEN))
+
+    async def fake_run_agent(cfg, **kw):
+        return 0
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    caplog.set_level(logging.DEBUG)
+    assert cli.agent_main(["run"]) == 0
+    out = capsys.readouterr()
+    assert "expire" not in caplog.text and "daily" not in out.out + out.err
+    assert AGENT_TOKEN not in out.out + out.err + caplog.text
+
+
+def test_agent_run_with_legacy_jwt_still_runs_and_hints_to_relogin(cfgdir, monkeypatch, capsys):
+    from ha_edge import agent
+
+    (cfgdir / "agent.json").write_text(
+        json.dumps({"base_url": "http://srv", "email": "a@b.c", "access_token": JWT})
+    )
+    seen = {}
+
+    async def fake_run_agent(cfg, **kw):
+        seen["cfg"] = cfg
+        return 0
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    assert cli.agent_main(["run"]) == 0
+    assert seen["cfg"].bearer_token == JWT
+    out = capsys.readouterr()
+    assert "re-run `ha-agent login` to stop daily logins" in out.err
+    assert JWT not in out.out + out.err
 
 
 def test_agent_test_alarm_plays_3s(monkeypatch):
@@ -370,10 +445,12 @@ def test_agent_login_without_me_still_saves_token(cfgdir, monkeypatch):
     respx.post("http://srv/auth/login").mock(
         return_value=httpx.Response(200, json={"access_token": JWT, "token_type": "bearer"})
     )
+    _mock_agent_token()
     respx.get("http://srv/auth/me").mock(return_value=httpx.Response(500))
     assert cli.agent_main(["login", "--server", "http://srv", "--email", "a@b.c"]) == 0
     saved = config.load_agent()
-    assert saved.access_token == JWT and saved.member_id is None
+    assert saved.agent_token == AGENT_TOKEN and saved.member_id is None
+    assert saved.access_token is None
 
 
 def test_old_agent_config_without_member_id_loads(cfgdir):

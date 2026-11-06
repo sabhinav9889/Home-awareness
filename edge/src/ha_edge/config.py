@@ -27,8 +27,15 @@ class SensorConfig:
 class AgentConfig:
     base_url: str
     email: str
-    access_token: str
+    # Legacy: a 24 h session JWT, as saved before agent tokens. Still honoured if present.
+    access_token: str | None = None
     member_id: int | None = None  # from GET /auth/me; absent in configs saved before it
+    agent_token: str | None = None  # long-lived, revocable `ha_agent_…` token
+
+    @property
+    def bearer_token(self) -> str | None:
+        """What `ha-agent` authenticates with: the agent token, else a legacy JWT."""
+        return self.agent_token or self.access_token
 
 
 def config_dir() -> Path:
@@ -36,14 +43,15 @@ def config_dir() -> Path:
     return Path(override) if override else Path(user_config_dir("home-awareness"))
 
 
-def _save(name: str, cfg) -> Path:
+def _save(name: str, cfg, *, omit_none: tuple[str, ...] = ()) -> Path:
+    data = {k: v for k, v in asdict(cfg).items() if not (k in omit_none and v is None)}
     d = config_dir()
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = d / name
     fd, tmp = tempfile.mkstemp(dir=d, prefix=f".{name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(asdict(cfg), f)
+            json.dump(data, f)
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
     except BaseException:
@@ -82,7 +90,8 @@ def load_sensor() -> SensorConfig | None:
 
 
 def save_agent(cfg: AgentConfig) -> Path:
-    return _save("agent.json", cfg)
+    # Store only the token the agent has: no `"access_token": null` beside an agent token.
+    return _save("agent.json", cfg, omit_none=("access_token", "agent_token"))
 
 
 def load_agent() -> AgentConfig | None:
