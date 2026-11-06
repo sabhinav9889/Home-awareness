@@ -45,5 +45,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv python install 3.12
-      - run: uv sync --dev
+      - run: uv sync --dev --locked
       - run: uv run ruff check . && uv run pytest -q
