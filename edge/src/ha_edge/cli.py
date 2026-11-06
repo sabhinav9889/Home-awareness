@@ -279,7 +279,7 @@ def _cmd_agent_run(args: argparse.Namespace) -> int:
             finally:
                 await alarm.aclose()
 
-    print(f"Listening for alerts from {cfg.base_url} as {cfg.email}. Ctrl-C to stop.")
+    print(f"Listening for alerts from {cfg.base_url} as {cfg.email}. Ctrl-C to stop.", flush=True)
     rc = asyncio.run(main())
     if rc == EXIT_RELOGIN:
         _err("The server rejected this login. Run `ha-agent login` again.")
@@ -302,7 +302,7 @@ def _cmd_test_alarm(args: argparse.Namespace) -> int:
         await player.wait()
         return EXIT_OK
 
-    print("Playing the alarm for 3 s on the default output…")
+    print("Playing the alarm for 3 s on the default output…", flush=True)
     return asyncio.run(main())
 
 

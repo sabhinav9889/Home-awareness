@@ -38,6 +38,7 @@ IM_ON_IT = "I'm on it"
 STOP_ALARM = "Stop alarm"
 RELOGIN_TEXT = "Please log in again: ha-agent login"
 FOOTER = "Home Awareness"
+TEST_SOUND_KEY = "test"  # POST /me/test-alert
 
 
 class ConnectionClosed(Exception):
@@ -55,24 +56,38 @@ class Alarm(Protocol):
 Connect = Callable[[str], AbstractAsyncContextManager[AsyncIterator[str]]]
 
 
-def ws_connector(http: httpx.AsyncClient) -> Connect:
+def _unwrap(group: BaseExceptionGroup) -> BaseException:
+    """The error that matters inside a TaskGroup's exception group (ConnectionClosed first)."""
+    closed = group.subgroup(ConnectionClosed)
+    leaves = closed.exceptions if closed is not None else group.exceptions
+    first = leaves[0]
+    return _unwrap(first) if isinstance(first, BaseExceptionGroup) else first
+
+
+def ws_connector(http: httpx.AsyncClient | None, aconnect: Any = None) -> Connect:
     """``connect(url)`` over httpx-ws; a close or network error raises ConnectionClosed."""
     from httpx_ws import WebSocketDisconnect, WebSocketNetworkError, aconnect_ws
 
+    aconnect = aconnect or aconnect_ws
+
     @asynccontextmanager
     async def connect(url: str) -> AsyncIterator[AsyncIterator[str]]:
-        async with aconnect_ws(url, http) as ws:
+        try:
+            async with aconnect(url, http) as ws:
 
-            async def messages() -> AsyncIterator[str]:
-                while True:
-                    try:
-                        yield await ws.receive_text()
-                    except WebSocketDisconnect as e:
-                        raise ConnectionClosed(e.code) from None
-                    except WebSocketNetworkError:
-                        raise ConnectionClosed(None) from None
+                async def messages() -> AsyncIterator[str]:
+                    while True:
+                        try:
+                            yield await ws.receive_text()
+                        except WebSocketDisconnect as e:
+                            raise ConnectionClosed(e.code) from None
+                        except WebSocketNetworkError:
+                            raise ConnectionClosed(None) from None
 
-            yield messages()
+                yield messages()
+        except BaseExceptionGroup as eg:
+            # httpx-ws runs the session in a TaskGroup, so the close arrives wrapped.
+            raise _unwrap(eg) from None
 
     return connect
 
@@ -140,8 +155,11 @@ class _Agent:
         log.info("alert %s: %s on %s", msg.get("alert_id"), label, device)
         if msg.get("alarm"):
             await self.alarm.play()
+        title = f"{label} — {device}"
+        if msg.get("sound_key") == TEST_SOUND_KEY:  # no sensor involved
+            title = "Test alert — your alerts work"
         # The popup is shown even when only the alarm was asked for: it is the stop button.
-        self.spawn(self._alert_popup(msg, f"{label} — {device}", _hhmm(msg.get("at"))))
+        self.spawn(self._alert_popup(msg, title, _hhmm(msg.get("at"))))
 
     async def _alert_popup(self, msg: dict[str, Any], title: str, hhmm: str) -> None:
         action = await self.popup(title, f"{hhmm} · {FOOTER}", [IM_ON_IT, STOP_ALARM])

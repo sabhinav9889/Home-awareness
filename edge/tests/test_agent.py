@@ -366,3 +366,88 @@ async def test_errors_never_log_the_token(caplog):
     text = "\n".join(r.getMessage() for r in caplog.records)
     assert TOKEN not in text
     assert "http://srv" in text
+
+
+# --- ws_connector over a session that, like httpx-ws, runs inside a TaskGroup ----------
+
+
+class FakeWs:
+    def __init__(self, texts, exc):
+        self.texts, self.exc = list(texts), exc
+
+    async def receive_text(self):
+        if self.texts:
+            return self.texts.pop(0)
+        raise self.exc
+
+
+def _fake_aconnect(texts, exc):
+    @asynccontextmanager
+    async def aconnect(url, client):
+        async with asyncio.TaskGroup() as tg:  # httpx-ws wraps body errors in a group
+            tg.create_task(asyncio.sleep(0))
+            yield FakeWs(texts, exc)
+
+    return aconnect
+
+
+async def _drain(connect):
+    got = []
+    async with connect("http://srv/ws?token=x") as messages:
+        async for m in messages:
+            got.append(m)
+    return got
+
+
+@pytest.mark.parametrize("code", [4401, 4403, 1011])
+async def test_ws_connector_unwraps_close_code_from_task_group(code):
+    from httpx_ws import WebSocketDisconnect
+
+    from ha_edge.agent import ws_connector
+
+    connect = ws_connector(None, aconnect=_fake_aconnect(["hi"], WebSocketDisconnect(code)))
+    with pytest.raises(ConnectionClosed) as e:
+        await _drain(connect)
+    assert e.value.code == code
+
+
+async def test_ws_connector_network_error_is_a_close_without_code():
+    from httpx_ws import WebSocketNetworkError
+
+    from ha_edge.agent import ws_connector
+
+    connect = ws_connector(None, aconnect=_fake_aconnect([], WebSocketNetworkError()))
+    with pytest.raises(ConnectionClosed) as e:
+        await _drain(connect)
+    assert e.value.code is None
+
+
+async def test_auth_close_through_task_group_still_exits_6():
+    from httpx_ws import WebSocketDisconnect
+
+    from ha_edge.agent import ws_connector
+
+    notifier = FakeNotifier()
+    async with httpx.AsyncClient() as http:
+        rc = await run_agent(
+            CFG,
+            connect=ws_connector(http, aconnect=_fake_aconnect([], WebSocketDisconnect(4401))),
+            notifier=notifier,
+            alarm=FakeAlarm(),
+            clock=lambda: 0.0,
+            http=http,
+            sleep=no_sleep,
+            stop=asyncio.Event(),
+        )
+    assert rc == EXIT_RELOGIN
+
+
+async def test_test_alert_title_does_not_mention_a_sensor():
+    msg = dict(ALERT, sound_key="test", label="Test alert", device_name="a removed sensor")
+    server = FakeServer(([msg], HANG))
+    notifier = FakeNotifier()
+    stop, task = _start(server, notifier, FakeAlarm())
+    await _until(lambda: notifier.popups)
+    assert notifier.popups[0][0] == "Test alert — your alerts work"
+    stop.set()
+    await task
