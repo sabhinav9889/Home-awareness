@@ -382,3 +382,28 @@ def test_old_agent_config_without_member_id_loads(cfgdir):
     )
     saved = config.load_agent()
     assert saved.member_id is None and saved.access_token == JWT
+
+
+# --- final review -----------------------------------------------------------------------
+
+
+@respx.mock
+def test_pair_rate_limited_says_wait(cfgdir, capsys):
+    respx.post("http://srv/device/pair").mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "42"})
+    )
+    assert cli.sensor_main(["pair", "--server", "http://srv", "--code", "ABC123"]) == 2
+    err = capsys.readouterr().err
+    assert "Too many attempts — wait 42 s and try again" in err
+    assert "cannot reach" not in err
+
+
+@respx.mock
+def test_pair_404_says_check_the_server_url(cfgdir, capsys):
+    respx.post("http://srv/device/pair").mock(
+        return_value=httpx.Response(404, json={"detail": "Not Found"})
+    )
+    assert cli.sensor_main(["pair", "--server", "http://srv", "--code", "ABC123"]) == 2
+    err = capsys.readouterr().err
+    assert "404" in err and "check the server URL" in err
+    assert "cannot reach" not in err

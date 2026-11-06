@@ -67,6 +67,18 @@ def _cmd_pair(args: argparse.Namespace) -> int:
     except api.PairingFailed as e:
         _err(f"Pairing failed: {e}. Create a new pairing code and try again.")
         return EXIT_USAGE
+    except api.RateLimited as e:
+        _err(f"Pairing failed: Too many attempts — wait {e.retry_after_s:g} s and try again.")
+        return EXIT_USAGE
+    except api.Rejected as e:
+        if e.status == 404:
+            _err(
+                f"Pairing failed: {args.server} answered 404 Not Found — check the server URL "
+                "(the address of your Home Awareness server, e.g. https://example.org)."
+            )
+        else:
+            _err(f"Pairing failed: the server refused the request ({e}).")
+        return EXIT_USAGE
     except api.ApiError as e:
         _err(f"Pairing failed: cannot reach the server at {args.server} ({e}).")
         return EXIT_ERROR
