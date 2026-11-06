@@ -239,16 +239,24 @@ async def _deliver_claimed(
 
     tasks = [asyncio.create_task(run(i, send)) for i, (_, send) in enumerate(external)]
     crash: Exception | None = None
-    for done in asyncio.as_completed(tasks):
-        try:
-            i, outcome = await done
-        except Exception as e:  # noqa: BLE001  re-raised below, after the others finish
-            crash = crash or e
-            continue  # left pending: the abort path marks it failed
-        d = external[i][0]
-        outcome.apply(d)
-        await session.commit()
-        DELIVERIES.labels(d.channel, d.status).inc()
+    try:
+        for done in asyncio.as_completed(tasks):
+            try:
+                i, outcome = await done
+            except Exception as e:  # noqa: BLE001  re-raised below, after the others finish
+                crash = crash or e
+                continue  # left pending: the abort path marks it failed
+            d = external[i][0]
+            outcome.apply(d)
+            await session.commit()
+            DELIVERIES.labels(d.channel, d.status).inc()
+    finally:
+        # If a commit (or anything here) raised, stop the remaining sends before the abort
+        # path marks the alert failed: nothing may go out after that.
+        pending = [t for t in tasks if not t.done()]
+        for t in pending:
+            t.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
     if crash is not None:
         raise crash
 

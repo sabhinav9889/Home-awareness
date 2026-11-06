@@ -546,3 +546,38 @@ async def test_outcome_finishing_during_another_commit_is_stored(
     }
     stored_alert = await session.scalar(select(Alert.status).where(Alert.id == alert.id))
     assert stored_alert == "partial"
+
+
+async def test_failed_commit_cancels_remaining_sends(
+    signed_up, session, factory, redis, published, monkeypatch
+):
+    member, _ = await signed_up()
+    await _prefs(session, member, telegram=True, telegram_chat_id="42", ntfy_topic="t")
+    alert = await _alert(session, member)
+    alert_id = alert.id
+    went_out = []
+    ntfy_done = []
+
+    async def slow_telegram(http, token, chat_id, text):
+        await asyncio.sleep(0.2)
+        went_out.append("telegram")
+
+    async def fast_ntfy(http, base, topic, text):
+        ntfy_done.append(1)
+
+    real_commit = session.commit
+    raised = []
+
+    async def flaky_commit():
+        if ntfy_done and not raised:
+            raised.append(1)
+            raise RuntimeError("db went away")
+        await real_commit()
+
+    monkeypatch.setattr(delivery.telegram, "send_message", slow_telegram)
+    monkeypatch.setattr(delivery.ntfy, "publish", fast_ntfy)
+    monkeypatch.setattr(session, "commit", flaky_commit)
+    await _run(alert, factory, redis)
+    await asyncio.sleep(0.3)  # long enough for an orphaned telegram task to finish
+    assert raised and went_out == []  # nothing sent after the alert was marked failed
+    assert await session.scalar(select(Alert.status).where(Alert.id == alert_id)) == "failed"
