@@ -1,5 +1,5 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -126,9 +126,14 @@ async def _deliveries(session, alert_id):
     return {d.channel: d for d in rows}
 
 
-async def _run(alert, factory, redis, sleep=_no_sleep):
+async def _run(alert, factory, redis, sleep=_no_sleep, *, age=timedelta(seconds=30)):
+    """Deliver as if `age` has passed since the alert was created (fresh by default)."""
+    created = alert.created_at
     async with httpx.AsyncClient() as http:
-        await deliver_alert(alert.id, session_factory=factory, redis=redis, http=http, sleep=sleep)
+        await deliver_alert(
+            alert.id, session_factory=factory, redis=redis, http=http, sleep=sleep,
+            clock=lambda: created + age,
+        )  # fmt: skip
 
 
 @respx.mock
@@ -265,7 +270,7 @@ async def test_celery_runner_publishes_fast_and_off_loop(monkeypatch, settings):
         lambda args, **kw: calls.append((args, kw)),
     )
     await jobs.get_job_runner().enqueue_alert(3)
-    assert calls == [((3,), {"retry": False})]
+    assert calls == [((3,), {"retry": False, "expires": 600})]
 
 
 async def test_inprocess_runner_logs_task_exceptions(monkeypatch, caplog):
@@ -412,3 +417,30 @@ async def test_websocket_only_and_nobody_listening_fails_alert(
     assert d["websocket"].status == "failed" and d["websocket"].last_error == "no live listener"
     await session.refresh(alert)
     assert alert.status == "failed"
+
+
+@respx.mock
+async def test_alert_older_than_10_minutes_fails_without_sending(
+    signed_up, session, factory, redis, published
+):
+    member, _ = await signed_up()
+    await _prefs(session, member, telegram=True, telegram_chat_id="42", ntfy_topic="t")
+    alert = await _alert(session, member)
+    tg = respx.post(TG_URL).mock(return_value=httpx.Response(200, json={"ok": True}))
+    nt = respx.post("https://ntfy.test/t").mock(return_value=httpx.Response(200))
+    await _run(alert, factory, redis, age=timedelta(minutes=10, seconds=1))
+    assert not tg.called and not nt.called and published == []
+    assert await _deliveries(session, alert.id) == {}
+    await session.refresh(alert)
+    assert alert.status == "failed"
+
+
+@respx.mock
+async def test_alert_just_under_10_minutes_still_delivers(
+    signed_up, session, factory, redis, published
+):
+    member, _ = await signed_up()
+    alert = await _alert(session, member)
+    await _run(alert, factory, redis, age=timedelta(minutes=9, seconds=59))
+    await session.refresh(alert)
+    assert alert.status == "sent" and len(published) == 1

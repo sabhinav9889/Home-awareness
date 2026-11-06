@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Protocol
 
-from app.alerts.delivery import deliver_alert
+from app.alerts.delivery import MAX_ALERT_AGE, deliver_alert
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,13 @@ class CeleryJobRunner:
 
         # apply_async blocks (kombu retries a dead broker): run it off the event loop and
         # fail fast so enqueue_or_fallback can deliver in-process instead.
-        await asyncio.to_thread(deliver_alert_task.apply_async, (alert_id,), retry=False)
+        # expires: a message still queued after 10 minutes is discarded (see MAX_ALERT_AGE).
+        await asyncio.to_thread(
+            deliver_alert_task.apply_async,
+            (alert_id,),
+            retry=False,
+            expires=int(MAX_ALERT_AGE.total_seconds()),
+        )
 
 
 class InProcessJobRunner:

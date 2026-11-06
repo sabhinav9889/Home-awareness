@@ -1,6 +1,7 @@
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -22,6 +23,9 @@ TEST_TEXT = "🔔 Test alert from Home Awareness — your alerts work."
 BACKOFF = (1, 4)  # seconds slept after attempt 1 and 2; 3 attempts in total
 MAX_ERROR = 500
 NO_LISTENER = "no live listener"
+log = logging.getLogger(__name__)
+# An alert this old is dropped, not sent: an hour-late "scream" alarm is worse than none.
+MAX_ALERT_AGE = timedelta(minutes=10)
 
 
 def _default_session_factory():
@@ -57,6 +61,7 @@ async def deliver_alert(
     redis: Redis | None = None,
     http: httpx.AsyncClient | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> None:
     if redis is None:
         from app.redis import get_redis
@@ -65,7 +70,12 @@ async def deliver_alert(
     if http is None:
         async with httpx.AsyncClient(timeout=10) as own_http:
             return await deliver_alert(
-                alert_id, session_factory=session_factory, redis=redis, http=own_http, sleep=sleep
+                alert_id,
+                session_factory=session_factory,
+                redis=redis,
+                http=own_http,
+                sleep=sleep,
+                clock=clock,
             )
     settings = get_settings()
     async with session_factory() as session:
@@ -82,6 +92,11 @@ async def deliver_alert(
         if claimed is None:
             return
         alert = await session.get(Alert, alert_id)
+        if clock() - alert.created_at > MAX_ALERT_AGE:
+            alert.status = "failed"  # stale (queue backlog, worker down): send nothing
+            await session.commit()
+            log.warning("alert %s dropped: older than %s", alert_id, MAX_ALERT_AGE)
+            return
         tenant = Tenant.for_household(alert.household_id, session)
         prefs = await session.scalar(
             tenant.select(AlertPreference).where(AlertPreference.member_id == alert.member_id)
