@@ -71,7 +71,12 @@ async def household_recipients(
     """Every external channel a household's members enabled (read now; sent later)."""
     settings = settings or get_settings()
     tenant = Tenant.for_household(household_id, session)
-    members = (await session.execute(tenant.select(Member))).scalars().all()
+    # Same rule as alerts: members who never confirmed their email get nothing.
+    members = (
+        (await session.execute(tenant.select(Member).where(Member.email_confirmed.is_(True))))
+        .scalars()
+        .all()
+    )
     prefs = {
         p.member_id: p for p in (await session.execute(tenant.select(AlertPreference))).scalars()
     }

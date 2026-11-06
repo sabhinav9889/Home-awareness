@@ -376,3 +376,19 @@ async def test_celery_check_failure_opens_a_quiet_window(redis, monkeypatch):
     with pytest.raises(RuntimeError):
         await celery_app._check_offline()
     assert await redis.get(offline.QUIET_KEY) is not None
+
+
+async def test_status_messages_skip_unconfirmed_members(signed_up, session):
+    from app.auth.models import Member
+
+    owner, _ = await signed_up()
+    await _prefs(session, owner, ntfy_topic="owner-topic")
+    pending = Member(
+        household_id=owner.household_id, email="p@example.com", password_hash="x",
+        role="member", email_confirmed=False,
+    )  # fmt: skip
+    session.add(pending)
+    await session.flush()
+    await _prefs(session, pending, ntfy_topic="pending-topic")
+    got = await offline.household_recipients(session, owner.household_id, SETTINGS)
+    assert [(r.member_id, r.address) for r in got] == [(owner.id, "owner-topic")]
