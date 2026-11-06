@@ -25,13 +25,13 @@ async def _setup(signed_up, session, devices=1):
     return owner, ids
 
 
-async def _fire(session, redis, owner, device_id, sound, now):
+async def _fire(session, redis, owner, device_id, sound, now, confidence=0.9):
     now_dt = datetime.now(UTC)
     ev = Event(
         household_id=owner.household_id,
         device_id=device_id,
         sound_key=sound,
-        confidence=0.9,
+        confidence=confidence,
         occurred_at=now_dt,
         received_at=now_dt,
     )

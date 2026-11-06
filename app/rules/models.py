@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.auth.models import Member  # noqa: F401  (registers members table)
@@ -14,6 +14,9 @@ class SoundSetting(Base):
         CheckConstraint("repeat_count BETWEEN 1 AND 20"),
         CheckConstraint("window_s BETWEEN 5 AND 3600"),
         CheckConstraint("cooldown_s BETWEEN 0 AND 86400"),
+        CheckConstraint(
+            "min_confidence BETWEEN 0.05 AND 0.95", name="ck_sound_settings_min_confidence"
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -26,6 +29,8 @@ class SoundSetting(Base):
     repeat_count: Mapped[int]
     window_s: Mapped[int]
     cooldown_s: Mapped[int]
+    # Null means the catalog's default_min_confidence applies.
+    min_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class AlertPreference(Base):

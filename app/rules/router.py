@@ -59,20 +59,23 @@ async def put_sound_setting(
             SoundSetting.member_id == tenant.member.id, SoundSetting.sound_key == key
         )
     )
+    # exclude_unset: an omitted min_confidence keeps the stored override; explicit null clears.
+    fields = body.model_dump(exclude_unset=True)
     if row is None:
-        row = tenant.add(
-            SoundSetting(member_id=tenant.member.id, sound_key=key, **body.model_dump())
-        )
+        row = tenant.add(SoundSetting(member_id=tenant.member.id, sound_key=key, **fields))
     else:
-        for field, value in body.model_dump().items():
+        for field, value in fields.items():
             setattr(row, field, value)
     await session.commit()
     return SoundSettingOut(
         sound_key=key,
-        enabled=body.enabled,
-        repeat_count=body.repeat_count,
-        window_s=body.window_s,
-        cooldown_s=body.cooldown_s,
+        enabled=row.enabled,
+        repeat_count=row.repeat_count,
+        window_s=row.window_s,
+        cooldown_s=row.cooldown_s,
+        min_confidence=(
+            SOUNDS[key].default_min_confidence if row.min_confidence is None else row.min_confidence
+        ),
     )
 
 

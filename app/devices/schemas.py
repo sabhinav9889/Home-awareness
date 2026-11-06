@@ -41,3 +41,5 @@ class WhoamiOut(BaseModel):
 class DeviceConfigOut(BaseModel):
     enabled_sounds: list[str]
     heartbeat_interval_s: int
+    # Per enabled sound: the lowest min_confidence any member who enabled it wants.
+    thresholds: dict[str, float]

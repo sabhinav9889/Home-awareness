@@ -8,6 +8,7 @@ from app.devices.models import Device
 from tests.test_devices import _pair
 
 DEFAULT_ON = ["glass_breaking", "scream", "smoke_alarm"]
+DEFAULT_THRESHOLDS = {"glass_breaking": 0.30, "scream": 0.30, "smoke_alarm": 0.30}
 
 
 pytestmark = pytest.mark.usefixtures("frozen_ratelimit_clock")
@@ -24,7 +25,11 @@ async def test_heartbeat_marks_online_and_returns_union_config(client, signed_up
     before = datetime.now(UTC)
     r = await client.post("/device/heartbeat", headers=dk)
     assert r.status_code == 200, r.text
-    assert r.json() == {"enabled_sounds": DEFAULT_ON, "heartbeat_interval_s": 60}
+    assert r.json() == {
+        "enabled_sounds": DEFAULT_ON,
+        "heartbeat_interval_s": 60,
+        "thresholds": DEFAULT_THRESHOLDS,
+    }
     device = await session.get(Device, device_id)
     await session.refresh(device)
     assert device.status == "online" and device.last_seen_at >= before
@@ -68,7 +73,11 @@ async def test_get_config_does_not_touch_last_seen_or_limit(client, signed_up, s
     for _ in range(6):
         r = await client.get("/device/config", headers=dk)
         assert r.status_code == 200
-        assert r.json() == {"enabled_sounds": DEFAULT_ON, "heartbeat_interval_s": 60}
+        assert r.json() == {
+            "enabled_sounds": DEFAULT_ON,
+            "heartbeat_interval_s": 60,
+            "thresholds": DEFAULT_THRESHOLDS,
+        }
     device = await session.get(Device, device_id)
     await session.refresh(device)
     assert device.last_seen_at is None and device.status == "pending"

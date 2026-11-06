@@ -15,11 +15,17 @@ class EffectiveSetting:
     repeat_count: int
     window_s: int
     cooldown_s: int
+    min_confidence: float
 
 
 def _default(s: Sound) -> EffectiveSetting:
     return EffectiveSetting(
-        s.key, s.default_enabled, s.default_repeat, s.default_window_s, s.default_cooldown_s
+        s.key,
+        s.default_enabled,
+        s.default_repeat,
+        s.default_window_s,
+        s.default_cooldown_s,
+        s.default_min_confidence,
     )
 
 
@@ -28,7 +34,14 @@ def _merge(overrides: dict[str, SoundSetting]) -> dict[str, EffectiveSetting]:
     for key, sound in SOUNDS.items():
         o = overrides.get(key)
         out[key] = (
-            EffectiveSetting(key, o.enabled, o.repeat_count, o.window_s, o.cooldown_s)
+            EffectiveSetting(
+                key,
+                o.enabled,
+                o.repeat_count,
+                o.window_s,
+                o.cooldown_s,
+                sound.default_min_confidence if o.min_confidence is None else o.min_confidence,
+            )
             if o
             else _default(sound)
         )
@@ -62,6 +75,21 @@ async def _household_effective(
 async def household_enabled_sounds(session: AsyncSession, household_id: int) -> set[str]:
     per_member = await _household_effective(session, household_id)
     return {k for eff in per_member.values() for k, s in eff.items() if s.enabled}
+
+
+async def household_thresholds(
+    session: AsyncSession, household_id: int, enabled: set[str]
+) -> dict[str, float]:
+    """Per enabled sound, the lowest effective min_confidence among confirmed members who
+    enabled it, so the sensor reports anything any member would want. `enabled` is
+    household_enabled_sounds' result. A sound enabled only by unconfirmed members (no one
+    is alerted for it) gets the catalog default."""
+    per_member = await _household_effective(session, household_id, confirmed_only=True)
+    out: dict[str, float] = {}
+    for key in enabled:
+        wanted = [eff[key].min_confidence for eff in per_member.values() if eff[key].enabled]
+        out[key] = min(wanted) if wanted else SOUNDS[key].default_min_confidence
+    return out
 
 
 async def members_enabled_for(

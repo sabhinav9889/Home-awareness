@@ -55,4 +55,6 @@ Recommended labels from F1 (good >= 0.8, fair 0.5-0.8, experimental < 0.5), at t
 
 No label changes are recommended: every measured sound already carries the label its F1 supports. crying and siren at 0.30 sit only just above the good cut-off; siren and coughing gain clearly from a 0.50 threshold, which the controller may want to consider as a per-sound default.
 
+These "better threshold" values are now applied as per-sound defaults (`default_min_confidence` in `app/catalog.py`: 0.50 for crying, dog_barking, siren and coughing; 0.30 for glass_breaking, knocking and every unmeasured sound). Members can override them per sound; the sensor uses the lowest threshold any member wants and the rule engine applies each member's own.
+
 Caveats: ESC-50 clips are short, clean and foreground-dominant, so real homes (background noise, distance, overlapping sounds) will score lower. `knocking` and `coughing` map to ESC-50 classes that are single events, whereas the catalog describes repeated knocking and a long coughing fit. Sound-level false-positive rates are per five-second clip, not per hour of audio. Treat these as upper bounds.

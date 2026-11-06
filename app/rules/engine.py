@@ -1,4 +1,4 @@
-"""Rule engine: merge window, repeat counts, cooldowns.
+"""Rule engine: merge window, per-member confidence thresholds, repeat counts, cooldowns.
 
 Decides whether a detected sound becomes an alert per member. Creates pending
 Alert rows (flushed, so they have ids); the caller enqueues them after commit.
@@ -46,6 +46,8 @@ async def process_event(
 
     alerts: list[Alert] = []
     for member_id, s in await members_enabled_for(session, hid, sound):
+        if event.confidence < s.min_confidence:
+            continue  # below this member's threshold: neither counted nor alerted
         rep = f"rep:{hid}:{member_id}:{sound}"
         pipe = redis.pipeline(transaction=False)
         pipe.zadd(rep, {str(event.id): now})

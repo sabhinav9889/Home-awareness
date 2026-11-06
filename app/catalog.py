@@ -14,6 +14,9 @@ class Sound:
     default_repeat: int = 1
     default_window_s: int = 60
     default_cooldown_s: int = 120
+    # Minimum detector confidence to report/alert. 0.30 is the detector's global default;
+    # measured sounds use the "better threshold" from docs/accuracy.md.
+    default_min_confidence: float = 0.30
 
 
 SOUNDS: dict[str, Sound] = {
@@ -21,17 +24,34 @@ SOUNDS: dict[str, Sound] = {
     for s in [
         Sound("scream", "Scream", "Distress", True, "good"),
         Sound("shouting", "Shouting / yelling", "Distress", False, "fair"),
-        Sound("crying", "Crying (baby or adult)", "Distress", False, "good"),
+        Sound(
+            "crying",
+            "Crying (baby or adult)",
+            "Distress",
+            False,
+            "good",
+            default_min_confidence=0.50,
+        ),
         Sound("moaning", "Moaning", "Distress", False, "experimental"),
         Sound("gasping", "Gasping / choking", "Distress", False, "experimental"),
-        Sound("coughing", "Long coughing fit", "Distress", False, "fair"),
+        Sound(
+            "coughing", "Long coughing fit", "Distress", False, "fair", default_min_confidence=0.50
+        ),
         Sound("glass_breaking", "Glass breaking", "Intrusion", True, "good"),
         Sound("door_slam", "Door slam / forced knock", "Intrusion", False, "fair"),
         Sound("knocking", "Repeated knocking / banging", "Intrusion", False, "fair"),
         Sound("car_alarm", "Car alarm", "Intrusion", False, "good"),
-        Sound("dog_barking", "Dog barking", "Intrusion", False, "good", default_repeat=5),
+        Sound(
+            "dog_barking",
+            "Dog barking",
+            "Intrusion",
+            False,
+            "good",
+            default_repeat=5,
+            default_min_confidence=0.50,
+        ),
         Sound("smoke_alarm", "Smoke / fire alarm", "Hazard", True, "good"),
-        Sound("siren", "Siren", "Hazard", False, "good"),
+        Sound("siren", "Siren", "Hazard", False, "good", default_min_confidence=0.50),
         Sound("explosion", "Loud bang / explosion", "Hazard", False, "fair"),
         Sound("running_water", "Running water / tap left on", "Hazard", False, "fair"),
         Sound("thud_fall", "Loud thud / fall", "Accident", False, "experimental"),

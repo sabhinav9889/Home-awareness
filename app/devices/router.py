@@ -30,7 +30,7 @@ from app.disclaimer import DISCLAIMER
 from app.live.hub import publish_to_household
 from app.ratelimit import by_device_key, by_ip, rate_limit
 from app.redis import get_redis
-from app.rules.effective import household_enabled_sounds
+from app.rules.effective import household_enabled_sounds, household_thresholds
 from app.security import hash_token, new_token
 from app.tenancy import Tenant, get_tenant
 
@@ -136,7 +136,12 @@ async def whoami(device: Annotated[Device, Depends(current_device)]) -> WhoamiOu
 
 async def _config(session: AsyncSession, device: Device) -> DeviceConfigOut:
     sounds = await household_enabled_sounds(session, device.household_id)
-    return DeviceConfigOut(enabled_sounds=sorted(sounds), heartbeat_interval_s=HEARTBEAT_INTERVAL_S)
+    thresholds = await household_thresholds(session, device.household_id, sounds)
+    return DeviceConfigOut(
+        enabled_sounds=sorted(sounds),
+        heartbeat_interval_s=HEARTBEAT_INTERVAL_S,
+        thresholds=dict(sorted(thresholds.items())),
+    )
 
 
 @router.post(
