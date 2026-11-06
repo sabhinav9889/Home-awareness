@@ -111,6 +111,7 @@ class YamnetClassifier:
         window = np.asarray(window, dtype=np.float32)
         if window.shape != (WINDOW_SAMPLES,):
             raise ValueError(f"window must have shape ({WINDOW_SAMPLES},), got {window.shape}")
+        window = np.clip(window, -1.0, 1.0)
         with self._lock:
             self._interp.set_tensor(self._in, window)
             self._interp.invoke()

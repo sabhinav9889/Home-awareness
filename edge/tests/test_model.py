@@ -101,3 +101,29 @@ def test_yamnet_detects_synthetic_siren_or_tone_class(clf):
     s = clf.scores(wave)
     top = clf.class_names[int(np.argmax(s))]
     assert top in ALLOWED, top
+
+
+class _FakeInterp:
+    def __init__(self):
+        self.seen = None
+
+    def set_tensor(self, index, value):
+        self.seen = value.copy()
+
+    def invoke(self):
+        pass
+
+    def get_tensor(self, index):
+        return np.zeros((1, model.NUM_CLASSES), dtype=np.float32)
+
+
+def test_scores_clips_window_to_unit_range():
+    import threading
+
+    clf = object.__new__(YamnetClassifier)
+    clf._interp = _FakeInterp()
+    clf._in, clf._out = 0, 1
+    clf._lock = threading.Lock()
+    window = np.linspace(-3.0, 3.0, model.WINDOW_SAMPLES, dtype=np.float32)
+    clf.scores(window)
+    assert clf._interp.seen.min() == -1.0 and clf._interp.seen.max() == 1.0
