@@ -8,6 +8,7 @@ EVENTS_MERGED = Counter("ha_events_merged", "Events merged into another sensor's
 ALERTS_CREATED = Counter("ha_alerts_created", "Alerts created from events", ["sound"])
 DELIVERIES = Counter("ha_deliveries", "Alert deliveries by outcome", ["channel", "status"])
 DEVICES_OFFLINE = Counter("ha_devices_offline", "Devices marked offline")
+ALERTS_STALE = Counter("ha_alerts_stale", "Undelivered alerts failed by the stale sweep")
 
 
 def render() -> tuple[bytes, str]:

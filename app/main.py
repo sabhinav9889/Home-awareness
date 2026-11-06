@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.alerts.router import router as alerts_router
+from app.alerts.sweep import sweep_loop
 from app.auth.agent_tokens import router as agent_tokens_router
 from app.auth.router import router as auth_router
 from app.config import get_settings
@@ -30,15 +31,19 @@ def create_app(*, run_background_jobs: bool = False) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        task = None
+        tasks: list[asyncio.Task] = []
         if run_background_jobs and get_settings().job_runner == "inprocess":
-            task = asyncio.create_task(offline_loop(_sessionmaker(), await get_redis()))
+            factory = _sessionmaker()
+            tasks = [
+                asyncio.create_task(offline_loop(factory, await get_redis())),
+                asyncio.create_task(sweep_loop(factory)),
+            ]
         try:
             yield
         finally:
-            if task is not None:
+            for task in tasks:
                 task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     app = FastAPI(title="Home Awareness", description=DISCLAIMER, lifespan=lifespan)
 

@@ -72,6 +72,23 @@ def check_offline_devices_task() -> None:
     asyncio.run(_check_offline())
 
 
+async def _sweep_stale() -> None:
+    from app.alerts.sweep import sweep_stale_alerts
+
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            await sweep_stale_alerts(session, datetime.now(UTC))
+    finally:
+        await engine.dispose()
+
+
+@celery.task(name="sweep_stale_alerts")
+def sweep_stale_alerts_task() -> None:
+    asyncio.run(_sweep_stale())
+
+
 celery.conf.beat_schedule = {
     "check-offline-devices": {"task": "check_offline_devices", "schedule": 60.0},
+    "sweep-stale-alerts": {"task": "sweep_stale_alerts", "schedule": 300.0},
 }
