@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.alerts.jobs import JobRunner, get_job_runner
+from app.alerts.jobs import JobRunner, enqueue_or_fallback, get_job_runner
 from app.catalog import get_sound
 from app.db import get_session
 from app.devices.deps import current_device, get_device_tenant
@@ -60,7 +60,7 @@ async def post_event(
     if outcome.alert_ids:
         ALERTS_CREATED.labels(event.sound_key).inc(len(outcome.alert_ids))
     for alert_id in outcome.alert_ids:  # after commit: workers must see the rows
-        await jobs.enqueue_alert(alert_id)
+        await enqueue_or_fallback(jobs, alert_id)
     await publish_to_household(
         redis,
         tenant.household_id,

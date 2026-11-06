@@ -18,7 +18,9 @@ class CeleryJobRunner:
     async def enqueue_alert(self, alert_id: int) -> None:
         from app.alerts.celery_app import deliver_alert_task
 
-        deliver_alert_task.delay(alert_id)
+        # apply_async blocks (kombu retries a dead broker): run it off the event loop and
+        # fail fast so enqueue_or_fallback can deliver in-process instead.
+        await asyncio.to_thread(deliver_alert_task.apply_async, (alert_id,), retry=False)
 
 
 class InProcessJobRunner:
@@ -41,6 +43,16 @@ _inprocess = InProcessJobRunner()
 
 def get_job_runner() -> JobRunner:
     return _inprocess if get_settings().job_runner == "inprocess" else CeleryJobRunner()
+
+
+async def enqueue_or_fallback(jobs: JobRunner, alert_id: int) -> None:
+    """Enqueue a committed alert; never let a queue failure drop it. On any error deliver
+    in this process (deliver_alert's atomic pending->delivering claim prevents a double send)."""
+    try:
+        await jobs.enqueue_alert(alert_id)
+    except Exception:
+        logger.error("enqueue failed for alert %s; delivering in-process", alert_id, exc_info=True)
+        await _inprocess.enqueue_alert(alert_id)
 
 
 class RecordingJobRunner:

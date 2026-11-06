@@ -2,7 +2,7 @@ x-app-env: &app-env
   environment:
     DATABASE_URL: postgresql+asyncpg://home:home@db:5432/home
     REDIS_URL: redis://redis:6379/0
-    JWT_SECRET: ${JWT_SECRET:-change-me-in-env-file-0123456789abcdef}
+    JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
     PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
     JOB_RUNNER: ${JOB_RUNNER:-celery}
     EMAIL_BACKEND: ${EMAIL_BACKEND:-console}

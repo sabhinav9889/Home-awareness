@@ -252,14 +252,18 @@ def test_job_runner_selected_by_setting(settings):
     assert isinstance(jobs.get_job_runner(), jobs.CeleryJobRunner)
 
 
-async def test_celery_runner_calls_delay(monkeypatch, settings):
+async def test_celery_runner_publishes_fast_and_off_loop(monkeypatch, settings):
     import app.alerts.celery_app as celery_app
 
     calls = []
     settings.job_runner = "celery"
-    monkeypatch.setattr(celery_app.deliver_alert_task, "delay", lambda i: calls.append(i))
+    monkeypatch.setattr(
+        celery_app.deliver_alert_task,
+        "apply_async",
+        lambda args, **kw: calls.append((args, kw)),
+    )
     await jobs.get_job_runner().enqueue_alert(3)
-    assert calls == [3]
+    assert calls == [((3,), {"retry": False})]
 
 
 async def test_inprocess_runner_logs_task_exceptions(monkeypatch, caplog):

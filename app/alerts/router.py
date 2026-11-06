@@ -12,7 +12,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.alerts import telegram
-from app.alerts.jobs import JobRunner, get_job_runner
+from app.alerts.jobs import JobRunner, enqueue_or_fallback, get_job_runner
 from app.alerts.models import Alert, Delivery
 from app.auth.models import Member
 from app.catalog import SOUNDS
@@ -121,7 +121,7 @@ async def test_alert(
     alert = tenant.add(Alert(member_id=tenant.member.id, event_id=None, sound_key="test"))
     await session.flush()
     await session.commit()  # commit before enqueue: workers must see the row
-    await jobs.enqueue_alert(alert.id)
+    await enqueue_or_fallback(jobs, alert.id)
     return TestAlertAccepted(alert_id=alert.id)
 
 
