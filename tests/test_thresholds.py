@@ -148,3 +148,45 @@ async def test_engine_uses_catalog_default_threshold(signed_up, session, redis):
     assert out.alert_ids == []
     _, out = await _fire(session, redis, owner, dev, "siren", 1001.0, confidence=0.5)
     assert len(out.alert_ids) == 1
+
+
+async def _alerted(session, out):
+    rows = (await session.scalars(select(Alert).where(Alert.id.in_(out.alert_ids)))).all()
+    return [a.member_id for a in rows]
+
+
+async def _two_devices_x_loose_y_strict(signed_up, session):
+    owner, (a, b) = await _setup(signed_up, session, devices=2)
+    y = await _second_member(session, owner)
+    await _set_conf(session, owner, "scream", 0.30)  # X
+    await _set_conf(session, y, "scream", 0.50)  # Y
+    return owner, y, a, b
+
+
+async def test_merged_higher_report_alerts_stricter_member_once(signed_up, session, redis):
+    x, y, a, b = await _two_devices_x_loose_y_strict(signed_up, session)
+    _, o1 = await _fire(session, redis, x, a, "scream", 1000.0, confidence=0.35)
+    assert o1.merged is False and await _alerted(session, o1) == [x.id]
+    e2, o2 = await _fire(session, redis, x, b, "scream", 1001.0, confidence=0.80)
+    assert o2.merged is True and e2.merged is True
+    assert await _alerted(session, o2) == [y.id]  # X was already satisfied by A's report
+    _, o3 = await _fire(session, redis, x, b, "scream", 1002.0, confidence=0.90)
+    _, o4 = await _fire(session, redis, x, a, "scream", 1003.0, confidence=0.95)
+    assert o3.alert_ids == [] and o4.alert_ids == []
+    total = (await session.scalars(select(Alert.member_id).order_by(Alert.id))).all()
+    assert total == [x.id, y.id]
+
+
+async def test_merged_report_below_every_threshold_alerts_nobody(signed_up, session, redis):
+    x, y, a, b = await _two_devices_x_loose_y_strict(signed_up, session)
+    await _fire(session, redis, x, a, "scream", 1000.0, confidence=0.35)
+    _, out = await _fire(session, redis, x, b, "scream", 1001.0, confidence=0.45)
+    assert out.merged is True and out.alert_ids == []
+
+
+async def test_repeated_reports_from_holder_do_not_block_other_device(signed_up, session, redis):
+    x, y, a, b = await _two_devices_x_loose_y_strict(signed_up, session)
+    for i in range(3):
+        await _fire(session, redis, x, a, "scream", 1000.0 + i, confidence=0.35)
+    _, out = await _fire(session, redis, x, b, "scream", 1004.0, confidence=0.80)
+    assert out.merged is True and await _alerted(session, out) == [y.id]

@@ -1,5 +1,8 @@
 """Rule engine: merge window, per-member confidence thresholds, repeat counts, cooldowns.
 
+A report merged into another device's incident still alerts members whose threshold it
+newly crosses (the earlier reports were too weak for them).
+
 Decides whether a detected sound becomes an alert per member. Creates pending
 Alert rows (flushed, so they have ids); the caller enqueues them after commit.
 """
@@ -22,32 +25,60 @@ class RuleOutcome:
     alert_ids: list[int]
 
 
-async def _is_merged(redis: Redis, event: Event) -> bool:
-    """True if another device already reported this sound within the merge window."""
-    key = f"merge:{event.household_id}:{event.sound_key}"
-    device = str(event.device_id)
-    if await redis.set(key, device, nx=True, ex=MERGE_WINDOW_S):
-        return False
-    holder = await redis.get(key)
-    if holder is not None and holder != device:
-        return True
-    # Same device repeating (or key expired between calls): counts, refresh window.
-    await redis.set(key, device, ex=MERGE_WINDOW_S)
-    return False
+# One round trip, atomic. KEYS[1] holds the device that opened the incident, KEYS[2] the
+# highest confidence reported during it (same lifetime). Returns {merged, previous max}.
+_MERGE_LUA = """
+local ttl = tonumber(ARGV[3])
+if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'EX', ttl) then
+  redis.call('SET', KEYS[2], ARGV[2], 'EX', ttl)
+  return {0, ''}
+end
+local prev = redis.call('GET', KEYS[2])
+local top = ARGV[2]
+if prev and tonumber(prev) > tonumber(top) then top = prev end
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  -- the same device repeating counts as new reports and refreshes the window
+  redis.call('SET', KEYS[1], ARGV[1], 'EX', ttl)
+  redis.call('SET', KEYS[2], top, 'EX', ttl)
+  return {0, prev or ''}
+end
+local left = redis.call('PTTL', KEYS[1])
+if left > 0 then redis.call('SET', KEYS[2], top, 'PX', left) end
+return {1, prev or ''}
+"""
+
+
+async def _merge_state(redis: Redis, event: Event) -> tuple[bool, float]:
+    """(merged, highest confidence reported earlier in this incident).
+
+    Merged means another device already reported this sound within the merge window.
+    """
+    base = f"{event.household_id}:{event.sound_key}"
+    script = redis.register_script(_MERGE_LUA)
+    merged, prev = await script(
+        keys=[f"merge:{base}", f"mergemax:{base}"],
+        args=[str(event.device_id), repr(float(event.confidence)), MERGE_WINDOW_S],
+    )
+    return bool(int(merged)), float(prev) if prev else float("-inf")
 
 
 async def process_event(
     session: AsyncSession, redis: Redis, event: Event, now: float
 ) -> RuleOutcome:
     hid, sound = event.household_id, event.sound_key
-    if await _is_merged(redis, event):
+    merged, prev_max = await _merge_state(redis, event)
+    if merged:
         event.merged = True
-        return RuleOutcome(True, [])
 
     alerts: list[Alert] = []
     for member_id, s in await members_enabled_for(session, hid, sound):
         if event.confidence < s.min_confidence:
             continue  # below this member's threshold: neither counted nor alerted
+        if merged and prev_max >= s.min_confidence:
+            # A duplicate from another device: this member was already served by an
+            # earlier, confident-enough report of the same incident. Only members whose
+            # threshold this higher report newly crosses go on (cooldown still applies).
+            continue
         rep = f"rep:{hid}:{member_id}:{sound}"
         pipe = redis.pipeline(transaction=False)
         pipe.zadd(rep, {str(event.id): now})
@@ -66,4 +97,4 @@ async def process_event(
         session.add(alert)
         alerts.append(alert)
     await session.flush()
-    return RuleOutcome(False, [a.id for a in alerts])
+    return RuleOutcome(merged, [a.id for a in alerts])
