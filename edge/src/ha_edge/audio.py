@@ -48,7 +48,16 @@ def list_inputs(run: Callable = subprocess.run) -> list[InputDevice]:
         raise RuntimeError(f"pw-dump failed: {exc}") from exc
     if proc.returncode != 0:
         raise RuntimeError(f"pw-dump failed: {(proc.stderr or '').strip()}")
-    objects = json.loads(proc.stdout)
+    try:
+        objects = json.loads(proc.stdout)
+        if not isinstance(objects, list):
+            raise TypeError("expected a JSON list")
+        return _parse_inputs(objects)
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        raise RuntimeError(f"pw-dump printed unexpected output ({exc})") from exc
+
+
+def _parse_inputs(objects: list) -> list[InputDevice]:
     default_name = None
     for obj in objects:
         if (

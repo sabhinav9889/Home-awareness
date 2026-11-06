@@ -336,3 +336,24 @@ async def test_spawn_kwargs_stdin_devnull_stderr_pipe():
     assert seen["stdin"] == asyncio.subprocess.DEVNULL
     assert seen["stderr"] == asyncio.subprocess.PIPE
     assert seen["stdout"] == asyncio.subprocess.PIPE
+
+
+@pytest.mark.parametrize("stdout", ["not json{", "", '{"a": 1}', "[1, 2]"])
+def test_list_inputs_bad_pw_dump_output_is_a_runtime_error(stdout):
+    def run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    with pytest.raises(RuntimeError, match="pw-dump"):
+        list_inputs(run=run)
+
+
+def test_cli_devices_reports_bad_pw_dump_output(monkeypatch, capsys):
+    from ha_edge import audio, cli
+
+    def run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="garbage", stderr="")
+
+    real = audio.list_inputs
+    monkeypatch.setattr(audio, "list_inputs", lambda: real(run=run))
+    assert cli.sensor_main(["devices"]) == 1
+    assert "Cannot list microphones" in capsys.readouterr().err
