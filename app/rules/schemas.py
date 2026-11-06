@@ -39,7 +39,9 @@ class AlertPreferencesIn(BaseModel):
     popup: bool
     alarm: bool
     telegram: bool
-    ntfy_topic: NtfyTopic | None = None
+    # Required, but may be null: omitting it is a 422, so a client that forgets the field
+    # can't silently switch off someone's ntfy alerts. Send null to clear it.
+    ntfy_topic: NtfyTopic | None
 
 
 class AlertPreferencesOut(BaseModel):

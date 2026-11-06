@@ -105,13 +105,12 @@ async def test_telegram_pref_requires_linked_chat(client, signed_up):
     assert (got["popup"], got["alarm"], got["telegram"]) == (True, False, False)
     r = await client.put(
         "/me/alert-preferences",
-        json={"popup": True, "alarm": True, "telegram": True},
+        json={"popup": True, "alarm": True, "telegram": True, "ntfy_topic": None},
         headers=h,
     )
     assert r.status_code == 400 and r.json()["detail"] == "link Telegram first"
-    r = await client.put(
-        "/me/alert-preferences", json={"popup": False, "alarm": True, "telegram": False}, headers=h
-    )
+    body = {"popup": False, "alarm": True, "telegram": False, "ntfy_topic": None}
+    r = await client.put("/me/alert-preferences", json=body, headers=h)
     assert r.status_code == 200 and r.json()["alarm"] is True
 
 
@@ -130,3 +129,14 @@ async def test_short_ntfy_topic_rejected_and_generated_topic_valid(client, signe
 
     assert re.fullmatch(r"[A-Za-z0-9_-]{20,64}", topic)
     assert (await client.get("/me/alert-preferences", headers=h)).json()["ntfy_topic"] == topic
+
+
+async def test_omitting_ntfy_topic_is_422_not_silent_clear(client, signed_up):
+    _, h = await signed_up()
+    topic = (await client.post("/me/alert-preferences/ntfy-topic", headers=h)).json()["ntfy_topic"]
+    body = {"popup": True, "alarm": False, "telegram": False}
+    assert (await client.put("/me/alert-preferences", json=body, headers=h)).status_code == 422
+    assert (await client.get("/me/alert-preferences", headers=h)).json()["ntfy_topic"] == topic
+    body["ntfy_topic"] = None  # clearing is explicit
+    r = await client.put("/me/alert-preferences", json=body, headers=h)
+    assert r.status_code == 200 and r.json()["ntfy_topic"] is None
