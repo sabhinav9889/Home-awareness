@@ -58,6 +58,38 @@ async def test_heartbeat_parses_config(client):
 
 
 @respx.mock
+async def test_heartbeat_parses_thresholds(client):
+    respx.post(f"{BASE}/device/heartbeat").respond(
+        200,
+        json={
+            "enabled_sounds": ["siren"],
+            "heartbeat_interval_s": 60,
+            "thresholds": {"siren": 0.5},
+        },
+    )
+    cfg = await client.heartbeat()
+    assert cfg.thresholds == {"siren": 0.5}
+
+
+@respx.mock
+async def test_heartbeat_from_old_server_without_thresholds(client):
+    respx.post(f"{BASE}/device/heartbeat").respond(
+        200, json={"enabled_sounds": ["siren"], "heartbeat_interval_s": 60}
+    )
+    cfg = await client.heartbeat()
+    assert cfg.thresholds == {}
+
+
+@respx.mock
+async def test_heartbeat_malformed_thresholds_raises_server_unavailable(client):
+    respx.post(f"{BASE}/device/heartbeat").respond(
+        200, json={"enabled_sounds": [], "heartbeat_interval_s": 60, "thresholds": ["x"]}
+    )
+    with pytest.raises(ServerUnavailable):
+        await client.heartbeat()
+
+
+@respx.mock
 async def test_send_event_posts_exact_fields_only(client):
     route = respx.post(f"{BASE}/device/events").respond(
         202, json={"event_id": 5, "merged": True, "alerts": 2}

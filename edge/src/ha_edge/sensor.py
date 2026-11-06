@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 
 from ha_edge.api import (
@@ -66,6 +66,7 @@ async def run_sensor(
     detector = Detector(build_index(names), num_classes=len(names))
     queue = EventQueue(clock=monotonic)
     enabled: frozenset[str] = frozenset()  # empty until the first successful heartbeat
+    thresholds: Mapping[str, float] = {}  # per-sound; empty means the global default
     code = EXIT_OK
 
     def fatal(exit_code: int) -> None:
@@ -85,9 +86,9 @@ async def run_sensor(
                 for window in windower.push(chunk):
                     scores = await asyncio.to_thread(classifier.scores, window)
                     playing = False
-                    if detector.playback_matters(scores, enabled):
+                    if detector.playback_matters(scores, enabled, thresholds):
                         playing = await asyncio.to_thread(probe.playing)
-                    for d in detector.process(scores, monotonic(), enabled, playing):
+                    for d in detector.process(scores, monotonic(), enabled, playing, thresholds):
                         log.info("detected %s (%.2f)", d.sound, d.confidence)
                         # Stamped after inference: lags the sound by a few ms (plus the
                         # window length), well within the server's tolerance.
@@ -101,7 +102,7 @@ async def run_sensor(
             fatal(EXIT_MIC_LOST)
 
     async def heartbeat_task() -> None:
-        nonlocal enabled
+        nonlocal enabled, thresholds
         interval: int | None = None  # None until the first success
         said_404 = False
         while True:
@@ -128,7 +129,13 @@ async def run_sensor(
                 continue
             if dc.enabled_sounds != enabled or interval is None:
                 log.info("enabled sounds: %s", ", ".join(sorted(dc.enabled_sounds)) or "none")
-            enabled = dc.enabled_sounds
+            if dc.thresholds != thresholds:
+                log.info(
+                    "thresholds: %s",
+                    ", ".join(f"{k}={v:.2f}" for k, v in sorted(dc.thresholds.items()))
+                    or "default",
+                )
+            enabled, thresholds = dc.enabled_sounds, dc.thresholds
             # Events queued for a sound that is no longer enabled must never be sent.
             queue.retain(dc.enabled_sounds.__contains__)
             interval = max(1, dc.heartbeat_interval_s)

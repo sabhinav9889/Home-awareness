@@ -401,3 +401,36 @@ async def test_playback_probe_consulted_for_borderline_scores():
     assert clf.calls > before and probe.calls > 1
     assert await finish(task, stop) == EXIT_OK
     assert client.sent == []  # boosted threshold suppressed it
+
+
+async def test_heartbeat_thresholds_applied_to_detection():
+    strict = DeviceConfig(frozenset({"doorbell"}), 60, {"doorbell": 0.5})
+    client = FakeClient([strict])
+    clf = FakeClassifier(value=0.4)  # above the global 0.30, below doorbell's 0.50
+    task, stop = start(client, classifier=clf)
+    await until(lambda: clf.calls >= 20 and client.heartbeats >= 1)
+    before = clf.calls
+    await asyncio.sleep(0.05)
+    assert clf.calls > before  # still classifying while we watched for sends
+    assert await finish(task, stop) == EXIT_OK
+    assert client.sent == []
+
+    loose = DeviceConfig(frozenset({"doorbell"}), 60, {"doorbell": 0.35})
+    client = FakeClient([loose])
+    task, stop = start(client, classifier=FakeClassifier(value=0.4))
+    await until(lambda: client.sent)
+    assert await finish(task, stop) == EXIT_OK
+    assert {s for s, _, _ in client.sent} == {"doorbell"}
+
+
+async def test_playback_probe_skipped_below_per_sound_threshold():
+    client = FakeClient([DeviceConfig(frozenset({"doorbell"}), 60, {"doorbell": 0.6})])
+    clf = FakeClassifier(value=0.4)  # borderline for 0.30, but dropped anyway at 0.60
+    probe = CountingProbe()
+    task, stop = start(client, classifier=clf, probe=probe)
+    await until(lambda: clf.calls >= 10 and client.heartbeats >= 1)
+    before = clf.calls
+    await asyncio.sleep(0.02)
+    assert clf.calls > before
+    assert await finish(task, stop) == EXIT_OK
+    assert probe.calls == 0

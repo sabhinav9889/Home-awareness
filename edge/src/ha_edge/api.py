@@ -9,8 +9,8 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import httpx
@@ -60,6 +60,9 @@ class PairingFailed(ApiError):
 class DeviceConfig:
     enabled_sounds: frozenset[str]
     heartbeat_interval_s: int
+    # Per-sound minimum confidence; empty from servers that predate thresholds, in which
+    # case the detector's global default applies.
+    thresholds: Mapping[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -151,8 +154,9 @@ class ServerClient:
             raise _rejected(resp)
         try:
             data = resp.json()
+            thresholds = {str(k): float(v) for k, v in data.get("thresholds", {}).items()}
             return DeviceConfig(
-                frozenset(data["enabled_sounds"]), int(data["heartbeat_interval_s"])
+                frozenset(data["enabled_sounds"]), int(data["heartbeat_interval_s"]), thresholds
             )
         except (ValueError, KeyError, TypeError, AttributeError):
             raise ServerUnavailable("malformed heartbeat response") from None

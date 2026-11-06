@@ -81,3 +81,46 @@ def test_playback_matters_uses_capped_boost():
     d = Detector(INDEX, threshold=0.9, boost=0.2)
     assert d.playback_matters(sc(i0=0.94), ALL)
     assert not d.playback_matters(sc(i0=0.96), ALL)
+
+
+def test_per_sound_threshold_respected():
+    d = Detector(INDEX)  # global 0.30
+    th = {"scream": 0.6}
+    assert d.process(sc(i0=0.59), 0.0, ALL, False, thresholds=th) == []
+    assert [x.sound for x in d.process(sc(i0=0.6), 1.0, ALL, False, thresholds=th)] == ["scream"]
+
+
+def test_per_sound_threshold_missing_key_falls_back_to_global():
+    d = Detector(INDEX)
+    out = d.process(sc(i3=0.35), 0.0, ALL, False, thresholds={"scream": 0.6})
+    assert [x.sound for x in out] == ["doorbell"]
+
+
+def test_per_sound_threshold_boosted_and_capped_while_playing():
+    d = Detector(INDEX)
+    th = {"scream": 0.5, "doorbell": 0.9}
+    # 0.5 + 0.2 boost = 0.7
+    assert d.process(sc(i0=0.69), 0.0, ALL, True, thresholds=th) == []
+    out = d.process(sc(i0=0.71), 3.0, ALL, True, thresholds=th)  # float32: 0.7 is 0.6999...
+    assert [x.sound for x in out] == ["scream"]
+    # 0.9 + 0.2 capped at 0.95
+    assert [x.sound for x in d.process(sc(i3=0.96), 6.0, ALL, True, thresholds=th)] == ["doorbell"]
+
+
+def test_received_thresholds_clamped_and_non_finite_ignored():
+    d = Detector(INDEX)
+    # 0.0 is clamped up to 0.05; 2.0 is clamped down to 0.95
+    assert d.process(sc(i0=0.04), 0.0, ALL, False, thresholds={"scream": 0.0}) == []
+    assert len(d.process(sc(i0=0.05), 3.0, ALL, False, thresholds={"scream": 0.0})) == 1
+    assert len(d.process(sc(i3=0.96), 6.0, ALL, False, thresholds={"doorbell": 2.0})) == 1
+    # NaN would make every comparison false (always emit): fall back to the global 0.30
+    assert d.process(sc(i0=0.2), 9.0, ALL, False, thresholds={"scream": float("nan")}) == []
+
+
+def test_playback_matters_uses_per_sound_threshold():
+    d = Detector(INDEX)
+    th = {"scream": 0.6}
+    assert not d.playback_matters(sc(i0=0.4), ALL, thresholds=th)  # below 0.6: dropped anyway
+    assert d.playback_matters(sc(i0=0.7), ALL, thresholds=th)  # in [0.6, 0.8)
+    assert not d.playback_matters(sc(i0=0.8), ALL, thresholds=th)  # emitted either way
+    assert d.playback_matters(sc(i3=0.4), ALL, thresholds=th)  # doorbell: global 0.30

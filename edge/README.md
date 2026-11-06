@@ -55,10 +55,14 @@ What to know:
   which sounds this household enabled; until it answers, every detection is dropped (it
   retries every 5 s). Only enabled sounds are ever sent, and only the sound type, a
   confidence and a time: raw audio never leaves the process and is never written to disk.
-- **Audio playing through the speakers raises the detection threshold** (from 0.30 to
-  0.50 per sound), so a film is less likely to trigger alerts. This also makes real sounds
-  slightly harder to catch while something plays, and it isn't perfect: loud media can
-  still trigger. Playback through **headphones** doesn't count (the mic can't hear it).
+- **Each sound has its own detection threshold**, sent by the server with the heartbeat:
+  the lowest any household member set for that sound (defaults from measured accuracy:
+  0.50 for siren, coughing, dog barking and crying, 0.30 for the rest). A server too old to
+  send thresholds means 0.30 for every sound.
+- **Audio playing through the speakers raises the detection threshold** (by 0.20 per
+  sound, e.g. 0.30 to 0.50, capped at 0.95), so a film is less likely to trigger alerts.
+  This also makes real sounds slightly harder to catch while something plays, and it
+  isn't perfect: loud media can still trigger. Playback through **headphones** doesn't count (the mic can't hear it).
   Only the **default output** is considered: audio sent to another output device is
   treated as not playing.
 - Events the server rejects are dropped with a logged reason (at most once per reason per

@@ -1,9 +1,12 @@
 """Turns per-window YAMNet scores into debounced, thresholded detections."""
 
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
 
+MIN_THRESHOLD = 0.05
 MAX_THRESHOLD = 0.95
 
 
@@ -31,21 +34,43 @@ class Detector:
         self._needed = max((i for idx in index.values() for i in idx), default=-1) + 1
         self._last_emit: dict[str, float] = {}
 
-    def playback_matters(self, scores: np.ndarray, enabled: frozenset[str]) -> bool:
+    def _base(self, sound: str, thresholds: Mapping[str, float] | None) -> float:
+        """The sound's threshold from the server, else the global default. Received values
+        are clamped into [MIN_THRESHOLD, MAX_THRESHOLD]; non-finite ones are ignored."""
+        t = thresholds.get(sound) if thresholds else None
+        if t is None or not math.isfinite(t):
+            return self._threshold
+        return min(max(t, MIN_THRESHOLD), MAX_THRESHOLD)
+
+    def playback_matters(
+        self,
+        scores: np.ndarray,
+        enabled: frozenset[str],
+        thresholds: Mapping[str, float] | None = None,
+    ) -> bool:
         """True if some enabled sound scores in [threshold, boosted threshold).
 
         Only then can "is the machine playing audio?" change the outcome, so the caller
-        can skip the playback probe for every other window.
+        can skip the playback probe for every other window. Uses the same per-sound
+        thresholds as ``process``.
         """
         scores = np.asarray(scores)
-        boosted = min(self._threshold + self._boost, MAX_THRESHOLD)
         for sound, idxs in self._index.items():
-            if sound in enabled and self._threshold <= float(scores[idxs].max()) < boosted:
+            if sound not in enabled:
+                continue
+            base = self._base(sound, thresholds)
+            boosted = min(base + self._boost, MAX_THRESHOLD)
+            if base <= float(scores[idxs].max()) < boosted:
                 return True
         return False
 
     def process(
-        self, scores: np.ndarray, at: float, enabled: frozenset[str], playing: bool
+        self,
+        scores: np.ndarray,
+        at: float,
+        enabled: frozenset[str],
+        playing: bool,
+        thresholds: Mapping[str, float] | None = None,
     ) -> list[Detection]:
         scores = np.asarray(scores)
         expected = self._num_classes
@@ -53,11 +78,12 @@ class Detector:
             raise ValueError(f"scores must be 1-D of length {expected}, got {scores.shape}")
         if scores.shape[0] < self._needed:
             raise ValueError(f"scores too short: {scores.shape[0]} < {self._needed}")
-        limit = min(self._threshold + (self._boost if playing else 0.0), MAX_THRESHOLD)
+        boost = self._boost if playing else 0.0
         out: list[Detection] = []
         for sound, idxs in self._index.items():
             if sound not in enabled:
                 continue
+            limit = min(self._base(sound, thresholds) + boost, MAX_THRESHOLD)
             conf = float(scores[idxs].max())
             if conf < limit:
                 continue
