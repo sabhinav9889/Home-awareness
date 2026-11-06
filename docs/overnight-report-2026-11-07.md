@@ -28,12 +28,28 @@ The top 8 features users value are already in our design. New candidates: vibrat
 per-member quiet hours, a Home Assistant/MQTT bridge. Rejected as conflicting with the design: uploading audio clips for review,
 emergency-service calling, radar/camera fall detection, a paid cloud tier.
 
-### 📝 Plan 2 — laptop sensor + alert agent: plan written (`docs/superpowers/plans/2026-11-07-plan-2-edge-client.md`)
-- Branch `plan-2-edge-client` (not merged yet). Done and reviewed so far: package skeleton + config (0600 files), server client with an in-memory retry queue, YAMNet label map + detector, **YAMNet running on this laptop (3.4 ms per window, model checksum-verified)**, microphone capture pinned to one mic (PipeWire), and the "is media playing through speakers?" probe (headphones correctly ignored).
+### ✅ Plan 2 — laptop sensor + alert agent: done, reviewed, merged into `main` (local only)
+- 9 tasks + final review + one fix wave. **221 edge tests + 175 server tests pass** (re-run by me with warnings-as-errors). Built: package skeleton + config (0600 files), server client with an in-memory retry queue, YAMNet label map + detector, **YAMNet running on this laptop (3.4 ms per window, model checksum-verified)**, microphone capture pinned to one mic (PipeWire), and the "is media playing through speakers?" probe (headphones correctly ignored).
 - PortAudio isn't installed and I can't sudo, so audio goes through PipeWire's own tools (`pw-record`, `pw-dump`, `pw-play`) — verified on your built-in mic.
 - I removed six generic YAMNet labels ("Door", "Dog", "Breathing", "Breaking", "Bang", "Grunt") because they'd fire on everyday sounds and flood you with alerts.
 - **Measured accuracy (ESC-50, 2,000 real clips) — `docs/accuracy.md`:** F1 at threshold 0.30 — dog barking 0.88, glass breaking 0.84, crying 0.81, siren 0.81, knocking 0.74, coughing 0.66. These are clean-recording upper bounds. Every current reliability label in the catalog matches. Siren and coughing do better at 0.50 → per-sound thresholds are a good next enhancement. Scream, smoke alarm, doorbell, thud and 7 others have no ESC-50 class, so they stay unmeasured.
+- **`ha-sensor`** (pair / devices / fetch-model / run): real smoke against the server — paired, heartbeats, a synthetic smoke-alarm recording produced 4 `smoke_alarm` events at the server, revoking the device stopped it with "pair again".
+- **`ha-agent`** (login / run / test-alarm): real smoke — a test alert arrived live; popup + alarm through the default output (= your headphones when plugged in); "I'm on it" acknowledges; the alarm is capped (30 s per alert, restarts on a new alarm alert, 3 min overall).
+- Reviews caught and fixed: a housemate's "I'm on it" (or a test alert) could have silenced *your* smoke alarm; one bad message could drop a popup; a mic unplugged mid-night could have silently switched to another input; if the laptop clock drifts >10 min the server rejects every event — now logged loudly; queued events for a sound you just turned off were still sent after an outage.
+- Setup guide: `edge/README.md` (Linux + PipeWire). Note: your speaker is **muted** and mic gain is **0.18** in system settings — the live mic heard only silence during testing. I didn't change your settings.
 - A usage limit paused everything from about 02:30 to 04:00; work resumed automatically.
+
+## Rulings I made on your behalf (Plan 2)
+1. Audio uses PipeWire's tools (`pw-record`, `pw-dump`, `pw-play`) because PortAudio isn't installed and I can't sudo. [Linux/PipeWire only for now]
+2, 6. Some tasks ran two builders in parallel on separate files to save time. [none observed]
+3. The sensor's send queue keeps events through server outages (up to 10 min, max 500) in memory only — never written to disk.
+4. Removed six generic YAMNet labels that fire on everyday sounds. [some real events missed for door slam / gasping / glass / explosion / moaning — accuracy doc shows the trade]
+5. The model is checksum-verified every time the sensor starts.
+7. A pinned mic that disappears stops the sensor (exit 4) — belt-and-braces: PipeWire "don't fall back" flags plus a 3 s no-audio watchdog.
+8. The alarm is streamed straight to `pw-play`; no temp files.
+9. "I'm on it" from someone else only silences the alarm for that same event (server now sends the event id).
+10. Pressing "Stop alarm"/"I'm on it" on your own laptop silences everything that's ringing.
+11. Alarm: 30 s per alert, restarts for a new alarm alert, hard cap 3 min of continuous ringing.
 
 ## Rulings I made on your behalf (Plan 1)
 Each is something the plan/spec didn't settle; "cost if wrong" in brackets.
