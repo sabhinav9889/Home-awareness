@@ -43,19 +43,19 @@ async def effective_settings(session: AsyncSession, member_id: int) -> dict[str,
 
 
 async def _household_effective(
-    session: AsyncSession, household_id: int
+    session: AsyncSession, household_id: int, *, confirmed_only: bool = False
 ) -> dict[int, dict[str, EffectiveSetting]]:
-    member_ids = (
-        await session.scalars(
-            select(Member.id).where(Member.household_id == household_id).order_by(Member.id)
-        )
-    ).all()
+    query = select(Member.id).where(Member.household_id == household_id).order_by(Member.id)
+    if confirmed_only:
+        query = query.where(Member.email_confirmed.is_(True))
+    member_ids = (await session.scalars(query)).all()
     rows = (
         await session.scalars(select(SoundSetting).where(SoundSetting.household_id == household_id))
     ).all()
     by_member: dict[int, dict[str, SoundSetting]] = {m: {} for m in member_ids}
     for r in rows:
-        by_member.setdefault(r.member_id, {})[r.sound_key] = r
+        if r.member_id in by_member:
+            by_member[r.member_id][r.sound_key] = r
     return {m: _merge(o) for m, o in by_member.items()}
 
 
@@ -67,5 +67,6 @@ async def household_enabled_sounds(session: AsyncSession, household_id: int) -> 
 async def members_enabled_for(
     session: AsyncSession, household_id: int, sound_key: str
 ) -> list[tuple[int, EffectiveSetting]]:
-    per_member = await _household_effective(session, household_id)
+    # Unconfirmed members can't sign in to see or acknowledge alerts: never alert them.
+    per_member = await _household_effective(session, household_id, confirmed_only=True)
     return [(m, eff[sound_key]) for m, eff in per_member.items() if eff[sound_key].enabled]

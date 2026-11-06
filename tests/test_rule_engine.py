@@ -202,3 +202,20 @@ async def test_same_device_refreshes_merge_window(signed_up, session, redis):
     e3, o3 = await _fire(session, redis, owner, b, "scream", 1002.0)
     assert o3.merged is True and e3.merged is True and o3.alert_ids == []
     assert await redis.get(f"merge:{owner.household_id}:scream") == str(a)
+
+
+async def test_unconfirmed_member_gets_no_alerts(signed_up, session, redis):
+    from app.rules.effective import members_enabled_for
+
+    owner, (dev,) = await _setup(signed_up, session)
+    pending = Member(
+        household_id=owner.household_id, email="pending@example.com", password_hash="x",
+        role="member", email_confirmed=False,
+    )  # fmt: skip
+    session.add(pending)
+    await session.flush()
+    enabled = await members_enabled_for(session, owner.household_id, "scream")
+    assert [m for m, _ in enabled] == [owner.id]
+    _, out = await _fire(session, redis, owner, dev, "scream", 1000.0)
+    alerts = (await session.scalars(select(Alert).where(Alert.id.in_(out.alert_ids)))).all()
+    assert [a.member_id for a in alerts] == [owner.id]
