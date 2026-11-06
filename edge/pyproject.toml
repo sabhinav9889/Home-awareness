@@ -35,6 +35,7 @@ packages = ["src/ha_edge"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = ["model: needs the real YAMNet .tflite (run `ha-sensor fetch-model`)"]
 
 [tool.ruff]
 line-length = 100

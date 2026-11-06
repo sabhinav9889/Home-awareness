@@ -18,7 +18,14 @@ def _parser(prog: str, description: str) -> argparse.ArgumentParser:
 
 
 def sensor_main(argv: Sequence[str] | None = None) -> int:
-    _parser("ha-sensor", "Turn this laptop into a sound sensor.").parse_args(argv)
+    parser = _parser("ha-sensor", "Turn this laptop into a sound sensor.")
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("fetch-model", help="download and verify the YAMNet model")
+    args = parser.parse_args(argv)
+    if args.command == "fetch-model":
+        from ha_edge import model
+
+        print(model.fetch_model(model.default_model_dir()))
     return 0
 
 

@@ -11,3 +11,12 @@ def test_help_contains_disclaimer(entry, capsys):
         getattr(cli, entry)(["--help"])
     assert e.value.code == 0
     assert DISCLAIMER in capsys.readouterr().out
+
+
+def test_fetch_model_prints_path(monkeypatch, capsys, tmp_path):
+    from ha_edge import model
+
+    target = tmp_path / "yamnet.tflite"
+    monkeypatch.setattr(model, "fetch_model", lambda d, **kw: target)
+    assert cli.sensor_main(["fetch-model"]) == 0
+    assert capsys.readouterr().out.strip() == str(target)
