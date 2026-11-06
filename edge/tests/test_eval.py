@@ -1,7 +1,9 @@
 import wave
+from typing import ClassVar
 
 import numpy as np
 import pytest
+
 from ha_edge.detector import Detector
 from ha_edge.evaluation import (
     ESC50_MAP,
@@ -50,7 +52,7 @@ def test_metrics_only_for_mapped_sounds():
 
 
 class FakeClassifier:
-    class_names = ["a", "b", "c"]
+    class_names: ClassVar[list[str]] = ["a", "b", "c"]
 
     def __init__(self, hot_window: int | None):
         self.calls = 0
@@ -76,7 +78,10 @@ def test_score_clip_windows_and_detects():
 def test_detections_from_scores_threshold():
     scores = [np.array([0, 0.4, 0], dtype=np.float32)]
     idx = {"dog_barking": [1]}
-    assert detections_from_scores(scores, Detector(idx, 0.3), ) == {"dog_barking"}
+    assert detections_from_scores(
+        scores,
+        Detector(idx, 0.3),
+    ) == {"dog_barking"}
     assert detections_from_scores(scores, Detector(idx, 0.5)) == set()
 
 
