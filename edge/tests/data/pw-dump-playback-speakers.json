@@ -1,0 +1,99 @@
+[
+ {
+  "id": 36,
+  "type": "PipeWire:Interface:Metadata",
+  "props": {
+   "metadata.name": "default"
+  },
+  "metadata": [
+   {
+    "subject": 0,
+    "key": "default.audio.sink",
+    "type": "Spa:String:JSON",
+    "value": {
+     "name": "alsa_output.pci-0000_00_1f.3.analog-stereo"
+    }
+   }
+  ]
+ },
+ {
+  "id": 48,
+  "type": "PipeWire:Interface:Device",
+  "info": {
+   "props": {
+    "device.description": "Built-in Audio",
+    "device.form-factor": "internal",
+    "device.name": "alsa_card.pci-0000_00_1f.3",
+    "media.class": "Audio/Device"
+   },
+   "params": {
+    "Route": [
+     {
+      "index": 0,
+      "direction": "Input",
+      "name": "analog-input-internal-mic",
+      "description": "Internal Microphone",
+      "available": "unknown",
+      "device": 0,
+      "devices": [
+       0
+      ]
+     },
+     {
+      "index": 2,
+      "direction": "Output",
+      "name": "analog-output-speaker",
+      "description": "Speakers",
+      "available": "unknown",
+      "device": 7,
+      "devices": [
+       7
+      ]
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 51,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "state": "running",
+   "props": {
+    "media.class": "Audio/Sink",
+    "node.name": "alsa_output.pci-0000_00_1f.3.analog-stereo",
+    "node.description": "Built-in Audio Analog Stereo",
+    "device.id": 48,
+    "card.profile.device": 7,
+    "api.alsa.path": "front:0",
+    "device.profile.description": "Analog Stereo"
+   }
+  }
+ },
+ {
+  "id": 52,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "state": "idle",
+   "props": {
+    "media.class": "Audio/Source",
+    "node.name": "alsa_input.pci-0000_00_1f.3.analog-stereo",
+    "device.id": 48
+   }
+  }
+ },
+ {
+  "id": 83,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "state": "running",
+   "props": {
+    "application.name": "pw-play",
+    "media.class": "Stream/Output/Audio",
+    "media.role": "Music",
+    "node.name": "pw-play",
+    "target.object": "alsa_output.pci-0000_00_1f.3.analog-stereo"
+   }
+  }
+ }
+]
