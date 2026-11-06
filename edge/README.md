@@ -10,3 +10,5 @@ shows alerts and plays an alarm.
 
 Config lives in the platformdirs user config dir (`sensor.json`, `agent.json`, mode 0600);
 set `HA_EDGE_CONFIG_DIR` to override.
+
+Accuracy measurements per sound: see [docs/accuracy.md](../docs/accuracy.md) (harness: `scripts/eval_accuracy.py`).
