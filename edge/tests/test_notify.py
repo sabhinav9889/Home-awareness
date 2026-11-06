@@ -246,3 +246,28 @@ async def test_lib_factory_failure_falls_back(capsys):
     n = DesktopNotifier(lib_factory=boom)
     assert await n.popup("Hello", "b", []) is None
     assert "Hello" in capsys.readouterr().err
+
+
+async def test_play_right_after_stop_starts_a_new_alarm():
+    spawn = Spawner()
+    player = AlarmPlayer(spawn=spawn)
+    await player.play()
+    player.stop()
+    await player.play()  # old task still reaping the terminated process
+    assert len(spawn.calls) == 2
+    assert spawn.procs[0].terminated and not spawn.procs[1].terminated
+    assert player.playing
+    player.stop()
+    await player.wait()
+    assert not player.playing
+
+
+async def test_concurrent_plays_after_stop_start_only_one_alarm():
+    spawn = Spawner()
+    player = AlarmPlayer(spawn=spawn)
+    await player.play()
+    player.stop()
+    await asyncio.gather(player.play(), player.play())
+    assert len(spawn.calls) == 2
+    player.stop()
+    await player.wait()

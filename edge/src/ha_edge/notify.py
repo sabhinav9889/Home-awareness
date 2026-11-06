@@ -183,10 +183,16 @@ class AlarmPlayer:
         self._sleep = sleep
         self._proc: Any = None
         self._task: asyncio.Task[None] | None = None
+        self._stopping = False  # stop() called; the task is still reaping the process
+        self._lock = asyncio.Lock()  # one play() at a time: never two alarms at once
         self.unavailable = False  # pw-play could not be started
 
     @property
     def playing(self) -> bool:
+        return self._running and not self._stopping
+
+    @property
+    def _running(self) -> bool:
         return self._task is not None and not self._task.done()
 
     def _argv(self) -> tuple[str, ...]:
@@ -204,8 +210,15 @@ class AlarmPlayer:
         )
 
     async def play(self) -> None:
+        async with self._lock:
+            await self._play()
+
+    async def _play(self) -> None:
         if self.playing:
             return
+        if self._running:
+            await self.wait()  # a stopped alarm finishes dying first
+        self._stopping = False
         try:
             proc = await self._spawn(*self._argv())
         except OSError as e:
@@ -253,6 +266,8 @@ class AlarmPlayer:
                 proc.terminate()
 
     def stop(self) -> None:
+        if self._running:
+            self._stopping = True
         if self._proc is not None:
             self._terminate(self._proc)  # silence now; _run reaps the process
 
