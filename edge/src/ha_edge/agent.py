@@ -38,8 +38,9 @@ IM_ON_IT = "I'm on it"
 STOP_ALARM = "Stop alarm"
 RELOGIN_TEXT = "Please log in again: ha-agent login"
 FOOTER = "Home Awareness"
-TEST_SOUND_KEY = "test"
-MAX_KNOWN_ALERTS = 200  # POST /me/test-alert
+TEST_SOUND_KEY = "test"  # POST /me/test-alert
+MAX_KNOWN_ALERTS = 200
+MAX_RING_S = 180.0  # continuous ringing (restarts included) is capped at 3 minutes
 
 
 class ConnectionClosed(Exception):
@@ -110,8 +111,10 @@ class _Agent:
         notifier: Notifier,
         alarm: Alarm,
         http: httpx.AsyncClient,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.cfg = cfg
+        self.clock = clock
         self.base = cfg.base_url.rstrip("/")
         self.notifier = notifier
         self.alarm = alarm
@@ -120,6 +123,7 @@ class _Agent:
         # Alerts are keyed by event (what alert_ack names), or by alert id for test alerts.
         self.known: dict[tuple[str, int], None] = {}  # alerts I received (bounded, oldest first)
         self.sounding: set[tuple[str, int]] = set()  # alerts the alarm is sounding for
+        self.ring_started: float | None = None  # when the current ringing wave began
 
     @staticmethod
     def _key(msg: dict[str, Any]) -> tuple[str, int] | None:
@@ -180,19 +184,39 @@ class _Agent:
         key = self._key(msg)
         if key is not None:
             self.known[key] = None
-            while len(self.known) > MAX_KNOWN_ALERTS:
-                self.known.pop(next(iter(self.known)))
         # Popup first, so a failing alarm can never cost the alert. It is shown even when
         # only the alarm was asked for: it is the stop button.
         self.spawn(self._alert_popup(key, msg.get("alert_id"), title, _hhmm(msg.get("at"))))
-        if msg.get("alarm"):
-            if not self.alarm.playing:
-                self.sounding.clear()  # anything left over ended on its own (30 s limit)
-            if key is not None:
-                self.sounding.add(key)
-            if self.alarm.playing:
-                self.alarm.stop()  # restart: a new alert gets a full 30 s
-            await self.alarm.play()
+        try:
+            if msg.get("alarm"):
+                await self._ring(key)
+        finally:
+            self._forget_oldest()
+
+    async def _ring(self, key: tuple[str, int] | None) -> None:
+        now = self.clock()
+        if not self.alarm.playing:
+            self.sounding.clear()  # anything left over ended on its own (30 s limit)
+            self.ring_started = None  # the alarm has been quiet: a new wave may ring
+        if key is not None:
+            self.sounding.add(key)
+        if self.ring_started is None:
+            self.ring_started = now
+        if self.alarm.playing:
+            if now - self.ring_started >= MAX_RING_S:
+                return  # rung for 3 minutes already: the popup alone until it goes quiet
+            self.alarm.stop()  # restart: a new alert gets a full 30 s
+        await self.alarm.play()
+
+    def _forget_oldest(self) -> None:
+        """Keep ``known`` bounded; an alert forgotten here can no longer keep the alarm on."""
+        while len(self.known) > MAX_KNOWN_ALERTS:
+            old = next(iter(self.known))
+            del self.known[old]
+            if old in self.sounding:
+                self.sounding.discard(old)
+                if not self.sounding:
+                    self.alarm.stop()
 
     async def _alert_popup(
         self, key: tuple[str, int] | None, alert_id: Any, title: str, hhmm: str
@@ -269,7 +293,7 @@ async def run_agent(
 ) -> int:
     """Run until ``stop`` is set (returns 0) or the server rejects the login (returns 6)."""
     stop = stop or asyncio.Event()
-    agent = _Agent(cfg, notifier, alarm, http)
+    agent = _Agent(cfg, notifier, alarm, http, clock)
     loop_task = asyncio.create_task(_connection_loop(agent, connect, clock, sleep, rand))
     stop_task = asyncio.create_task(stop.wait())
     try:

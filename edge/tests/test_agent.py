@@ -622,3 +622,52 @@ async def test_ack_for_popup_only_alert_shows_who():
     assert alarm.plays == 0
     stop.set()
     await task
+
+
+# --- final review: alarm wave -----------------------------------------------------------
+
+
+async def test_ringing_is_capped_at_3_minutes_until_the_alarm_goes_quiet():
+    gates = [asyncio.Event() for _ in range(4)]
+    alerts = [_alert(10 + i, 20 + i) for i in range(5)]
+    items = [alerts[0]]
+    for g, a in zip(gates, alerts[1:], strict=True):
+        items += [g, a]
+    server = FakeServer((items, HANG))
+    notifier, alarm = FakeNotifier({TITLE: _pending()}), FakeAlarm()
+    stop, task = _start(server, notifier, alarm)
+    await _until(lambda: alarm.plays == 1)  # t=0: ringing starts
+    server.now = 100.0
+    gates[0].set()
+    await _until(lambda: alarm.plays == 2)  # within 3 min: a new alert restarts it
+    server.now = 181.0
+    gates[1].set()
+    await _until(lambda: len(notifier.popups) == 3)
+    await _settle()
+    assert alarm.plays == 2 and alarm.stops == 1  # capped: popup only, no restart
+    assert alarm.playing  # still sounding out its current 30 s
+    alarm.playing = False  # the 30 s ran out: the alarm has been quiet
+    server.now = 200.0
+    gates[2].set()
+    await _until(lambda: alarm.plays == 3)  # quiet reset the cap: rings again
+    server.now = 250.0
+    gates[3].set()
+    await _until(lambda: alarm.plays == 4)  # 50 s into the new wave: restart allowed
+    stop.set()
+    await task
+
+
+async def test_alert_evicted_from_known_stops_its_alarm():
+    gate = asyncio.Event()
+    quiet = [_alert(1000 + i, 1000 + i, alarm=False) for i in range(200)]
+    server = FakeServer(([ALERT, *quiet[:199], gate, quiet[199]], HANG))
+    notifier, alarm = FakeNotifier({TITLE: _pending()}), FakeAlarm()
+    stop, task = _start(server, notifier, alarm)
+    await _until(lambda: len(notifier.popups) == 200)
+    await _settle()
+    assert alarm.playing  # event 3 is still remembered (200 known)
+    gate.set()
+    await _until(lambda: not alarm.playing)  # event 3 forgotten: nothing left to sound for
+    assert alarm.plays == 1
+    stop.set()
+    await task
