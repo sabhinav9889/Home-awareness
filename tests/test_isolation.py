@@ -30,6 +30,7 @@ HOUSEHOLD_SCOPED_ROUTES: list[tuple[str, str, dict | None]] = [
     ("DELETE", "/households/me/members/{a_member_id}", None),
     ("DELETE", "/devices/{a_device_id}", None),
     ("POST", "/alerts/{a_alert_id}/ack", None),
+    ("DELETE", "/me/agent-tokens/{a_agent_token_id}", None),
 ]
 
 Creator = Callable[..., Awaitable[dict[str, int]]]
@@ -85,7 +86,20 @@ async def create_alert(client, headers, outbox, tag) -> dict[str, int]:
     return {"alert": r.json()["alert_id"]}
 
 
-RESOURCE_CREATORS: list[Creator] = [create_member, create_device, create_event, create_alert]
+async def create_agent_token(client, headers, outbox, tag) -> dict[str, int]:
+    """Mint an agent token for the member owning `headers` and return its id."""
+    r = await client.post("/me/agent-tokens", json={"name": f"agent-{tag}"}, headers=headers)
+    assert r.status_code == 201, r.text
+    return {"agent_token": r.json()["id"]}
+
+
+RESOURCE_CREATORS: list[Creator] = [
+    create_member,
+    create_device,
+    create_event,
+    create_alert,
+    create_agent_token,
+]
 
 # (path, extractor(json) -> set of ids, resource name)
 LISTING_ROUTES: list[tuple[str, Callable[[dict], set[int]], str]] = [
@@ -93,6 +107,7 @@ LISTING_ROUTES: list[tuple[str, Callable[[dict], set[int]], str]] = [
     ("/devices", lambda j: {d["id"] for d in j}, "device"),
     ("/events", lambda j: {e["id"] for e in j}, "event"),
     ("/alerts", lambda j: {a["id"] for a in j}, "alert"),
+    ("/me/agent-tokens", lambda j: {t["id"] for t in j}, "agent_token"),
 ]
 
 

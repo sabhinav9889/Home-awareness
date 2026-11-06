@@ -26,7 +26,7 @@ from app.ratelimit import by_member, rate_limit
 from app.redis import get_redis
 from app.rules.models import AlertPreference
 from app.security import hash_token, new_token
-from app.tenancy import Tenant, get_tenant
+from app.tenancy import Tenant, get_agent_tenant, get_tenant
 
 router = APIRouter(tags=["alerts"])
 
@@ -139,7 +139,7 @@ class AckOut(BaseModel):
 )
 async def acknowledge_alert(
     alert_id: int,
-    tenant: Annotated[Tenant, Depends(get_tenant)],
+    tenant: Annotated[Tenant, Depends(get_agent_tenant)],  # ha-agent's "I'm on it" button
     session: Annotated[AsyncSession, Depends(get_session)],
     redis: Annotated[Redis, Depends(get_redis)],
 ):

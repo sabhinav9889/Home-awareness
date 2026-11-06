@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.alerts.router import router as alerts_router
+from app.auth.agent_tokens import router as agent_tokens_router
 from app.auth.router import router as auth_router
 from app.config import get_settings
 from app.db import _sessionmaker, get_session
@@ -57,6 +58,7 @@ def create_app(*, run_background_jobs: bool = False) -> FastAPI:
 
     app.add_middleware(RequestLogMiddleware)
     app.include_router(auth_router)
+    app.include_router(agent_tokens_router)
     app.include_router(households_router)
     app.include_router(rules_router)
     app.include_router(devices_router)

@@ -8,8 +8,8 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.deps import member_from_token
-from app.auth.models import Member
+from app.auth.deps import principal_from_token
+from app.auth.models import AgentToken, Member
 from app.db import get_session
 from app.live.hub import household_channel, member_channel
 from app.redis import get_redis
@@ -43,12 +43,15 @@ async def live(
     redis: Annotated[Redis, Depends(get_redis)],
     token: str = "",
 ) -> None:
-    member = await member_from_token(session, token)
-    await session.commit()  # end the read transaction: don't pin a connection for the socket's life
-    if member is None:
+    # A session JWT or an `ha-agent` token. A revoked token has no live push of its own:
+    # its open socket lives on until the next reconnect, which then fails with 4401.
+    principal = await principal_from_token(session, token)
+    await session.commit()  # end the read transaction (and persist last_used_at)
+    if principal is None:
         await ws.accept()
         await ws.close(code=UNAUTHORIZED)
         return
+    member = principal.member
     pubsub = redis.pubsub()
     try:
         # subscribe before accepting so nothing published after the handshake is missed
@@ -62,6 +65,12 @@ async def live(
                 Member.email_confirmed,
             )
         )
+        if still is not None and principal.agent_token_id is not None:
+            still = await session.scalar(
+                select(AgentToken.id).where(
+                    AgentToken.id == principal.agent_token_id, AgentToken.revoked_at.is_(None)
+                )
+            )
         await session.commit()
         await ws.accept()
         if still is None:

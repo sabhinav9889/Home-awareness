@@ -24,7 +24,8 @@ never by client-chosen ids:
 - Invite claim (auth/router.signup): an atomic UPDATE on the invite token hash; the token
   itself carries the household.
 - Auth lookups (auth/router, auth/deps, devices/deps, live/router): members by email, id
-  from a verified JWT, or devices by key hash, i.e. identifying who is calling at all.
+  from a verified JWT, agent tokens and devices by key hash, i.e. identifying who is
+  calling at all. An agent token's member must still be in the token's household.
 """
 
 from typing import Annotated, Any
@@ -33,7 +34,7 @@ from fastapi import Depends, HTTPException
 from sqlalchemy import Select, Update, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.deps import current_member
+from app.auth.deps import current_member, current_member_or_agent
 from app.auth.models import Member
 from app.db import get_session
 
@@ -94,4 +95,12 @@ async def get_tenant(
     member: Annotated[Member, Depends(current_member)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> Tenant:
+    return Tenant(member, session)
+
+
+async def get_agent_tenant(
+    member: Annotated[Member, Depends(current_member_or_agent)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> Tenant:
+    """Like get_tenant, but an `ha-agent` token is accepted too. Only for POST /alerts/{id}/ack."""
     return Tenant(member, session)
