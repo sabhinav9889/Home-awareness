@@ -13,11 +13,11 @@ This repository is the **FastAPI server core** (Plan 1): sign-up and households,
 Needs Docker with Compose.
 
 ```bash
-cp .env.example .env        # then set JWT_SECRET (compose refuses to start without it)
+cp .env.example .env        # then set JWT_SECRET (see below)
 docker compose up --build
 ```
 
-Generate a secret with `python -c "import secrets;print(secrets.token_urlsafe(48))"` and put it in `.env` as `JWT_SECRET`. This starts Postgres, Redis, a one-shot `migrate` (`alembic upgrade head`), then the `api` (http://localhost:8000, interactive docs at `/docs`), a Celery `worker` and a Celery `beat` (runs the offline check every 60 s). If a host port is taken, override it: `DB_HOST_PORT`, `REDIS_HOST_PORT`, `API_HOST_PORT`. Email defaults to the console backend: sign-up confirmation links appear in `docker compose logs api`.
+Generate a secret with `python -c "import secrets;print(secrets.token_urlsafe(48))"` and put it in `.env` as `JWT_SECRET`. `.env.example` ships it empty on purpose: Compose refuses to start while `JWT_SECRET` is empty or missing, and the app refuses to start with a weak one (shorter than 32 characters or a placeholder such as `change-me`), because anyone who can guess the secret can sign in to any household. This starts Postgres, Redis, a one-shot `migrate` (`alembic upgrade head`), then the `api` (http://localhost:8000, interactive docs at `/docs`), a Celery `worker` and a Celery `beat` (runs the offline check every 60 s). If a host port is taken, override it: `DB_HOST_PORT`, `REDIS_HOST_PORT`, `API_HOST_PORT`. Email defaults to the console backend: sign-up confirmation links appear in `docker compose logs api`.
 
 Configuration is environment variables only (see `.env.example` and `app/config.py`). `JOB_RUNNER=celery` (default, used by Compose) sends alert delivery to the worker; `inprocess` runs it inside the API process, for hosts without a worker.
 
@@ -37,7 +37,7 @@ The bot token and webhook secret are kept out of logs.
 Tests need Postgres (a `home_test` database, created by `docker/initdb`) and use fakeredis, so Redis is not required.
 
 ```bash
-cp -n .env.example .env   # compose needs JWT_SECRET set, even for db only
+cp -n .env.example .env   # then set JWT_SECRET: compose refuses to start, even for db only, while it is empty
 docker compose up -d db
 uv sync
 uv run pytest -q && uv run ruff check .

@@ -26,7 +26,7 @@ jobs:
       DATABASE_URL: postgresql+asyncpg://home:home@localhost:5432/home_test
       TEST_DATABASE_URL: postgresql+asyncpg://home:home@localhost:5432/home_test
       REDIS_URL: redis://localhost:6379/0
-      JWT_SECRET: ci-secret
+      JWT_SECRET: ci-only-jwt-secret-not-for-production-0123456789
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
