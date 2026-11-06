@@ -323,3 +323,22 @@ async def test_stop_while_pw_play_is_starting_terminates_the_new_process():
     assert len(procs) == 1 and procs[0].terminated
     assert not player.playing
     await player.wait()
+
+
+async def test_alarm_pcm_is_synthesized_once_per_length(monkeypatch):
+    calls = []
+    real = notify.synth_alarm
+
+    def counting(seconds, rate=notify.ALARM_RATE):
+        calls.append(seconds)
+        return real(seconds, rate)
+
+    monkeypatch.setattr(notify, "synth_alarm", counting)
+    spawn = Spawner()
+    player = AlarmPlayer(spawn=spawn, max_s=0.123)
+    for _ in range(3):
+        await player.play()
+        await _until(lambda: spawn.procs[-1].stdin.closed)
+        player.stop()
+        await player.wait()
+    assert calls == [0.123]

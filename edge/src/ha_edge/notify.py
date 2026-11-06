@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import subprocess
 import sys
@@ -153,6 +154,12 @@ def synth_alarm(seconds: float, rate: int = ALARM_RATE) -> bytes:
     return (wave * 32767).astype("<i2").tobytes()
 
 
+@functools.lru_cache(maxsize=4)
+def _alarm_pcm(seconds: float) -> bytes:
+    """The alarm clip for ``seconds``, built once (30 s is ~2.9 MB of PCM)."""
+    return synth_alarm(seconds)
+
+
 Spawn = Callable[..., Awaitable[Any]]
 
 
@@ -242,7 +249,7 @@ class AlarmPlayer:
 
     async def _feed(self, proc: Any) -> None:
         with contextlib.suppress(BrokenPipeError, ConnectionResetError, OSError):
-            proc.stdin.write(synth_alarm(self._max_s))
+            proc.stdin.write(_alarm_pcm(self._max_s))
             await proc.stdin.drain()
             proc.stdin.close()
 
