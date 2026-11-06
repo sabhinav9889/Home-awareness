@@ -1,0 +1,88 @@
+"""Sensor and agent config storage (JSON files, mode 0600, written atomically)."""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
+
+from platformdirs import user_config_dir
+
+
+class ConfigError(Exception):
+    """A config file exists but cannot be used."""
+
+
+@dataclass
+class SensorConfig:
+    base_url: str
+    device_id: int
+    device_key: str
+    mic_name: str | None = None
+
+
+@dataclass
+class AgentConfig:
+    base_url: str
+    email: str
+    access_token: str
+
+
+def config_dir() -> Path:
+    override = os.environ.get("HA_EDGE_CONFIG_DIR")
+    return Path(override) if override else Path(user_config_dir("home-awareness"))
+
+
+def _save(name: str, cfg) -> Path:
+    d = config_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / name
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=f".{name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(asdict(cfg), f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+    return path
+
+
+def _load(name: str, cls):
+    path = config_dir() / name
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise ConfigError(f"cannot read config file {path}: {e}") from e
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise TypeError("expected a JSON object")
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
+    except (ValueError, TypeError) as e:
+        raise ConfigError(f"corrupt config file {path}: {e}") from e
+
+
+def save_sensor(cfg: SensorConfig) -> Path:
+    return _save("sensor.json", cfg)
+
+
+def load_sensor() -> SensorConfig | None:
+    return _load("sensor.json", SensorConfig)
+
+
+def save_agent(cfg: AgentConfig) -> Path:
+    return _save("agent.json", cfg)
+
+
+def load_agent() -> AgentConfig | None:
+    return _load("agent.json", AgentConfig)
