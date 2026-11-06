@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -84,9 +84,14 @@ async def check_offline_devices(
     ).all()
     await session.commit()
     for device_id, household_id, name in rows:
-        await publish_to_household(
-            redis, household_id, {"kind": "device_offline", "device_id": device_id, "name": name}
-        )
+        try:
+            await publish_to_household(
+                redis,
+                household_id,
+                {"kind": "device_offline", "device_id": device_id, "name": name},
+            )
+        except Exception:  # noqa: BLE001  never let a live-publish failure skip the warnings
+            log.warning("live offline publish for device %s failed", device_id, exc_info=True)
         try:
             await _notify_members(session, household_id, offline_text(name), http, settings)
         except Exception:  # noqa: BLE001  one household's failure must not block the others
@@ -102,8 +107,6 @@ async def offline_loop(
     clock: Callable[[], datetime] | None = None,
 ) -> None:
     """In-process scheduler. Logs and continues on any error; stops only when cancelled."""
-    from datetime import UTC
-
     clock = clock or (lambda: datetime.now(UTC))
     async with httpx.AsyncClient(timeout=10) as http:
         while True:

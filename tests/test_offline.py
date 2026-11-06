@@ -179,3 +179,24 @@ async def test_lifespan_starts_loop_only_when_inprocess_and_opted_in(
         async with app.router.lifespan_context(app):
             await asyncio.sleep(0.01)
             assert bool(started) is expect
+
+
+@respx.mock
+async def test_publish_failure_does_not_block_other_devices(signed_up, session, redis, monkeypatch):
+    member, _ = await signed_up()
+    await _prefs(session, member, ntfy_topic="my-topic")
+    await _device(session, member, name="First")
+    await _device(session, member, name="Second")
+    calls = []
+
+    async def failing_publish(r, household_id, msg):
+        calls.append(msg["name"])
+        if len(calls) == 1:
+            raise RuntimeError("redis exploded")
+
+    monkeypatch.setattr(offline, "publish_to_household", failing_publish)
+    nt = respx.post("https://ntfy.test/my-topic").mock(return_value=httpx.Response(200))
+    async with httpx.AsyncClient() as http:
+        ids = await check_offline_devices(session, redis, NOW, http=http, settings=SETTINGS)
+    assert len(ids) == 2 and len(calls) == 2
+    assert nt.call_count == 2  # channels still attempted for the device whose publish raised

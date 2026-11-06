@@ -1,15 +1,22 @@
 import asyncio
+from datetime import UTC, datetime
 
 import httpx
 from celery import Celery
+from celery.signals import after_setup_logger, after_setup_task_logger
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.alerts.delivery import deliver_alert
 from app.config import get_settings
+from app.logging import protect_logs
 
 celery = Celery("home", broker=get_settings().redis_url)
+
+protect_logs()  # at import, and again after Celery (re)configures logging in worker/beat
+after_setup_logger.connect(lambda **_: protect_logs(), weak=False)
+after_setup_task_logger.connect(lambda **_: protect_logs(), weak=False)
 
 
 async def _run(alert_id: int) -> None:
@@ -39,8 +46,6 @@ def deliver_alert_task(alert_id: int) -> None:
 
 
 async def _check_offline() -> None:
-    from datetime import UTC, datetime
-
     from app.devices.offline import check_offline_devices
 
     settings = get_settings()
