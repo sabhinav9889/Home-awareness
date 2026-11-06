@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from redis.asyncio import Redis
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +17,7 @@ from app.devices.models import (
     PairingCode,
 )
 from app.devices.schemas import (
+    DeviceConfigOut,
     DeviceOut,
     PairIn,
     PairingCodeIn,
@@ -23,11 +25,16 @@ from app.devices.schemas import (
     PairOut,
     WhoamiOut,
 )
-from app.ratelimit import by_ip, rate_limit
+from app.live.hub import publish_to_household
+from app.ratelimit import by_device_key, by_ip, rate_limit
+from app.redis import get_redis
+from app.rules.effective import household_enabled_sounds
 from app.security import hash_token, new_token
 from app.tenancy import Tenant, get_tenant
 
 DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
+
+HEARTBEAT_INTERVAL_S = 60
 
 router = APIRouter(tags=["devices"])
 
@@ -125,3 +132,45 @@ async def delete_device(
 )
 async def whoami(device: Annotated[Device, Depends(current_device)]) -> WhoamiOut:
     return WhoamiOut(device_id=device.id, household_id=device.household_id)
+
+
+async def _config(session: AsyncSession, device: Device) -> DeviceConfigOut:
+    sounds = await household_enabled_sounds(session, device.household_id)
+    return DeviceConfigOut(enabled_sounds=sorted(sounds), heartbeat_interval_s=HEARTBEAT_INTERVAL_S)
+
+
+@router.post(
+    "/device/heartbeat",
+    response_model=DeviceConfigOut,
+    dependencies=[Depends(rate_limit("heartbeat", 4, 60, by_device_key))],
+    description=f"Record a heartbeat and return the device's sound config. {DISCLAIMER}",
+)
+async def heartbeat(
+    device: Annotated[Device, Depends(current_device)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> DeviceConfigOut:
+    was_offline = device.status == "offline"
+    device.last_seen_at = datetime.now(UTC)
+    device.status = "online"
+    config = await _config(session, device)
+    await session.commit()
+    if was_offline:
+        await publish_to_household(
+            redis,
+            device.household_id,
+            {"kind": "device_online", "device_id": device.id, "name": device.name},
+        )
+    return config
+
+
+@router.get(
+    "/device/config",
+    response_model=DeviceConfigOut,
+    description=f"Current sound config for the device, without a heartbeat. {DISCLAIMER}",
+)
+async def device_config(
+    device: Annotated[Device, Depends(current_device)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> DeviceConfigOut:
+    return await _config(session, device)

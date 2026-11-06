@@ -36,3 +36,8 @@ class DeviceOut(BaseModel):
 class WhoamiOut(BaseModel):
     device_id: int
     household_id: int
+
+
+class DeviceConfigOut(BaseModel):
+    enabled_sounds: list[str]
+    heartbeat_interval_s: int
