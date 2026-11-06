@@ -49,16 +49,19 @@ def deliver_alert_task(alert_id: int) -> None:
 
 
 async def _check_offline() -> None:
-    from app.devices.offline import check_offline_devices
+    from app.devices import offline
 
     settings = get_settings()
     engine = create_async_engine(settings.database_url, poolclass=NullPool)
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
         async with async_sessionmaker(engine, expire_on_commit=False)() as session:
-            await check_offline_devices(
+            await offline.check_offline_devices(
                 session, redis, datetime.now(UTC), process_started_at=PROCESS_STARTED_AT
             )
+    except Exception:
+        await offline.open_quiet_window(redis, datetime.now(UTC))  # then let Celery log it
+        raise
     finally:
         await redis.aclose()
         await engine.dispose()

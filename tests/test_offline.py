@@ -231,8 +231,9 @@ async def test_no_marking_when_no_device_anywhere_heartbeated_recently(signed_up
     assert await check_offline_devices(session, redis, NOW, settings=SETTINGS) == []
     await session.refresh(a)
     assert a.status == "online"
-    fresh = await _device(session, other, name="Fresh", age=5)  # heartbeats flow again
-    got = await check_offline_devices(session, redis, NOW, settings=SETTINGS)
+    fresh = await _device(session, other, name="Fresh", age=-170)  # heard again at +170 s
+    later = NOW + timedelta(seconds=180)  # after the post-silence quiet window (F2)
+    got = await check_offline_devices(session, redis, later, settings=SETTINGS)
     assert sorted(got) == sorted([a.id, b.id]) and fresh.id not in got
 
 
@@ -306,3 +307,72 @@ async def test_celery_check_passes_worker_start_time(monkeypatch):
     monkeypatch.setattr(offline, "check_offline_devices", spy)
     await celery_app._check_offline()
     assert seen == [celery_app.PROCESS_STARTED_AT]
+
+
+async def _seen(session, device, at):
+    await session.execute(update(Device).where(Device.id == device.id).values(last_seen_at=at))
+
+
+async def test_full_window_to_heartbeat_after_fleet_silence(signed_up, session, redis):
+    member, _ = await signed_up()
+    dead = await _device(session, member, name="Dead", age=300)
+    back = await _device(session, member, name="Back", age=300)
+    assert await check_offline_devices(session, redis, NOW, settings=SETTINGS) == []  # silent
+    await _seen(session, back, NOW + timedelta(seconds=30))  # the API hears a sensor again
+    for t in (60, 120, 179):  # within 180 s of the silence: still nobody marked
+        got = await check_offline_devices(
+            session, redis, NOW + timedelta(seconds=t), settings=SETTINGS
+        )
+        assert got == [], t
+    await _seen(session, back, NOW + timedelta(seconds=150))
+    got = await check_offline_devices(
+        session, redis, NOW + timedelta(seconds=180), settings=SETTINGS
+    )
+    assert got == [dead.id]  # a full window passed and it still hasn't heartbeated
+
+
+async def test_failed_check_opens_a_quiet_window(signed_up, session, redis, monkeypatch):
+    calls = []
+
+    async def failing(session, r, now, *, process_started_at=None, http=None, settings=None):
+        calls.append(now)
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(offline, "check_offline_devices", failing)
+    task = asyncio.create_task(offline_loop(_Ctx, redis, interval_s=0.01, clock=lambda: NOW))
+    for _ in range(100):
+        if calls:
+            break
+        await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    monkeypatch.undo()
+    assert float(await redis.get(offline.QUIET_KEY)) == (NOW + timedelta(seconds=180)).timestamp()
+    member, _ = await signed_up()
+    stale = await _device(session, member, name="Stale", age=400)
+    await _device(session, member, name="Live", age=-170)  # heard at +170 s
+    later = NOW + timedelta(seconds=179)
+    assert await check_offline_devices(session, redis, later, settings=SETTINGS) == []
+    later = NOW + timedelta(seconds=180)
+    assert await check_offline_devices(session, redis, later, settings=SETTINGS) == [stale.id]
+
+
+async def test_celery_check_failure_opens_a_quiet_window(redis, monkeypatch):
+    import app.alerts.celery_app as celery_app
+
+    async def failing(session, r, now, *, process_started_at=None, http=None, settings=None):
+        raise RuntimeError("db down")
+
+    class _NoClose:  # the task closes its client; keep the shared fake usable
+        def __getattr__(self, name):
+            return getattr(redis, name)
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(offline, "check_offline_devices", failing)
+    monkeypatch.setattr(celery_app.Redis, "from_url", lambda *a, **k: _NoClose())
+    with pytest.raises(RuntimeError):
+        await celery_app._check_offline()
+    assert await redis.get(offline.QUIET_KEY) is not None

@@ -27,6 +27,27 @@ OFFLINE_AFTER = timedelta(seconds=180)
 # Fleet-silence guard upper bound: see check_offline_devices.
 FLEET_SILENCE_MAX = timedelta(minutes=10)
 CHECK_INTERVAL_S = 60
+# Epoch seconds before which no device may be marked offline (see check_offline_devices).
+QUIET_KEY = "offline:quiet_until"
+
+
+async def open_quiet_window(redis: Redis, now: datetime) -> None:
+    """After a fleet-wide silence or a failed check, give every sensor a full OFFLINE_AFTER
+    window to heartbeat again before anything is marked. Best effort; never raises."""
+    try:
+        until = now + OFFLINE_AFTER
+        await redis.set(QUIET_KEY, until.timestamp(), ex=int(OFFLINE_AFTER.total_seconds()) + 60)
+    except Exception:  # noqa: BLE001
+        log.warning("could not record the offline quiet window", exc_info=True)
+
+
+async def _in_quiet_window(redis: Redis, now: datetime) -> bool:
+    try:
+        until = await redis.get(QUIET_KEY)
+    except Exception:  # noqa: BLE001  fail toward warning people, not toward silence
+        log.warning("could not read the offline quiet window", exc_info=True)
+        return False
+    return until is not None and now.timestamp() < float(until)
 
 
 def offline_text(name: str) -> str:
@@ -128,6 +149,11 @@ async def check_offline_devices(
        anyway. A recovered API hears from live sensors within one heartbeat interval, so a
        longer silence is real (a lone sensor died, or the home lost its internet) and
        staying quiet would leave people believing they are covered.
+    3. Recovery window: whenever guard 2 trips or a check fails, QUIET_KEY records
+       now + OFFLINE_AFTER, and nothing is marked until then. One sensor heartbeating
+       right after an outage must not get the others marked before they had a full window
+       to check in. (A lone dead sensor is therefore reported after ~13 minutes: the last
+       guard trip at ~10 min plus this window.)
     """
     if http is None:
         async with httpx.AsyncClient(timeout=10) as own_http:
@@ -146,6 +172,9 @@ async def check_offline_devices(
     newest = await session.scalar(select(func.max(Device.last_seen_at)))
     if newest is not None and OFFLINE_AFTER < now - newest <= FLEET_SILENCE_MAX:
         log.warning("no device heartbeat since %s; not marking devices offline yet", newest)
+        await open_quiet_window(redis, now)
+        return []
+    if await _in_quiet_window(redis, now):
         return []
     # Cross-household sweep, so it cannot go through a single-household Tenant. The atomic
     # claim means overlapping runs never both notify for the same device.
@@ -195,4 +224,5 @@ async def offline_loop(
                     )
             except Exception:  # noqa: BLE001
                 log.exception("offline check failed; will retry")
+                await open_quiet_window(redis, clock())
             await asyncio.sleep(interval_s)
