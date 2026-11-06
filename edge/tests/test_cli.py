@@ -169,3 +169,51 @@ def test_sensor_and_cli_exit_codes_agree():
         cli.EXIT_MIC_LOST,
         cli.EXIT_REVOKED,
     )
+
+
+def test_ctrl_c_during_setup_exits_quietly(run_env, monkeypatch, capsys):
+    from ha_edge import model
+
+    def interrupted(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(model, "fetch_model", interrupted)
+    assert cli.sensor_main(["run"]) == 0
+    assert "Traceback" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [httpx.ConnectError("no network"), OSError("disk full")],
+)
+def test_fetch_model_errors_are_friendly_exit_1(monkeypatch, capsys, exc):
+    from ha_edge import model
+
+    def boom(*a, **k):
+        raise exc
+
+    monkeypatch.setattr(model, "fetch_model", boom)
+    assert cli.sensor_main(["fetch-model"]) == 1
+    assert "Cannot download the sound model" in capsys.readouterr().err
+
+
+def test_fetch_model_integrity_error_exit_1(monkeypatch, capsys):
+    from ha_edge import model
+
+    def boom(*a, **k):
+        raise model.ModelIntegrityError("sha mismatch")
+
+    monkeypatch.setattr(model, "fetch_model", boom)
+    assert cli.sensor_main(["fetch-model"]) == 1
+    assert "sha mismatch" in capsys.readouterr().err
+
+
+def test_run_mic_listing_failure_exits_1(run_env, monkeypatch, capsys):
+    from ha_edge import audio
+
+    def broken():
+        raise RuntimeError("pw-dump failed: not found")
+
+    monkeypatch.setattr(audio, "list_inputs", broken)
+    assert cli.sensor_main(["run"]) == 1
+    assert "pw-dump" in capsys.readouterr().err

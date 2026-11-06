@@ -110,7 +110,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         devices = audio.list_inputs()
     except RuntimeError as e:
         _err(f"Cannot list microphones: {e}")
-        return EXIT_MIC_LOST
+        return EXIT_ERROR
     wanted = args.mic if args.mic is not None else cfg.mic_name
     if args.mic is None and cfg.mic_name is not None:
         # A pinned name must match exactly: never drift to a similarly named input.
@@ -174,15 +174,29 @@ def sensor_main(argv: Sequence[str] | None = None) -> int:
     r = sub.add_parser("run", help="listen and send detected sounds")
     r.add_argument("--mic", help="microphone name (or unique part of it); saved for next time")
     args = parser.parse_args(argv)
-    if args.command == "pair":
-        return _cmd_pair(args)
-    if args.command == "devices":
-        return _cmd_devices(args)
-    if args.command == "run":
-        return _cmd_run(args)
+    commands = {
+        "pair": _cmd_pair,
+        "devices": _cmd_devices,
+        "run": _cmd_run,
+        "fetch-model": _cmd_fetch_model,
+    }
+    try:
+        return commands[args.command](args)
+    except KeyboardInterrupt:  # Ctrl-C before the loop installs its signal handlers
+        return EXIT_OK
+
+
+def _cmd_fetch_model(args: argparse.Namespace) -> int:
+    import httpx
+
     from ha_edge import model
 
-    print(model.fetch_model(model.default_model_dir()))
+    try:
+        path = model.fetch_model(model.default_model_dir())
+    except (OSError, httpx.HTTPError, model.ModelIntegrityError) as e:
+        _err(f"Cannot download the sound model: {e}")
+        return EXIT_ERROR
+    print(path)
     return EXIT_OK
 
 
