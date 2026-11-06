@@ -38,7 +38,8 @@ IM_ON_IT = "I'm on it"
 STOP_ALARM = "Stop alarm"
 RELOGIN_TEXT = "Please log in again: ha-agent login"
 FOOTER = "Home Awareness"
-TEST_SOUND_KEY = "test"  # POST /me/test-alert
+TEST_SOUND_KEY = "test"
+MAX_KNOWN_ALERTS = 200  # POST /me/test-alert
 
 
 class ConnectionClosed(Exception):
@@ -48,6 +49,9 @@ class ConnectionClosed(Exception):
 
 
 class Alarm(Protocol):
+    @property
+    def playing(self) -> bool: ...
+
     async def play(self) -> None: ...
 
     def stop(self) -> None: ...
@@ -113,6 +117,23 @@ class _Agent:
         self.alarm = alarm
         self.http = http
         self.tasks: set[asyncio.Task[Any]] = set()
+        # Alerts are keyed by event (what alert_ack names), or by alert id for test alerts.
+        self.known: dict[tuple[str, int], None] = {}  # alerts I received (bounded, oldest first)
+        self.sounding: set[tuple[str, int]] = set()  # alerts the alarm is sounding for
+
+    @staticmethod
+    def _key(msg: dict[str, Any]) -> tuple[str, int] | None:
+        if msg.get("event_id") is not None:
+            return ("event", msg["event_id"])
+        if msg.get("alert_id") is not None:
+            return ("alert", msg["alert_id"])
+        return None
+
+    def _is_me(self, msg: dict[str, Any]) -> bool:
+        if self.cfg.member_id is not None:
+            return msg.get("by_member_id") == self.cfg.member_id
+        by = msg.get("by_email")
+        return isinstance(by, str) and by.casefold() == self.cfg.email.casefold()
 
     def _redact(self, text: str) -> str:
         return text.replace(self.cfg.access_token, "***") if self.cfg.access_token else text
@@ -153,21 +174,36 @@ class _Agent:
         label = msg.get("label") or "Sound"
         device = msg.get("device_name") or "a sensor"
         log.info("alert %s: %s on %s", msg.get("alert_id"), label, device)
-        if msg.get("alarm"):
-            await self.alarm.play()
         title = f"{label} — {device}"
         if msg.get("sound_key") == TEST_SOUND_KEY:  # no sensor involved
             title = "Test alert — your alerts work"
-        # The popup is shown even when only the alarm was asked for: it is the stop button.
-        self.spawn(self._alert_popup(msg, title, _hhmm(msg.get("at"))))
+        key = self._key(msg)
+        if key is not None:
+            self.known[key] = None
+            while len(self.known) > MAX_KNOWN_ALERTS:
+                self.known.pop(next(iter(self.known)))
+        # Popup first, so a failing alarm can never cost the alert. It is shown even when
+        # only the alarm was asked for: it is the stop button.
+        self.spawn(self._alert_popup(key, msg.get("alert_id"), title, _hhmm(msg.get("at"))))
+        if msg.get("alarm"):
+            if not self.alarm.playing:
+                self.sounding.clear()  # anything left over ended on its own (30 s limit)
+            if key is not None:
+                self.sounding.add(key)
+            if self.alarm.playing:
+                self.alarm.stop()  # restart: a new alert gets a full 30 s
+            await self.alarm.play()
 
-    async def _alert_popup(self, msg: dict[str, Any], title: str, hhmm: str) -> None:
+    async def _alert_popup(
+        self, key: tuple[str, int] | None, alert_id: Any, title: str, hhmm: str
+    ) -> None:
         action = await self.popup(title, f"{hhmm} · {FOOTER}", [IM_ON_IT, STOP_ALARM])
-        if action == STOP_ALARM:
+        if action in (STOP_ALARM, IM_ON_IT):
+            # A button press is the user, at this laptop: silence it outright.
+            self.sounding.clear()
             self.alarm.stop()
-        elif action == IM_ON_IT:
-            self.alarm.stop()
-            await self.ack(msg.get("alert_id"))
+        if action == IM_ON_IT:
+            await self.ack(alert_id)
 
     async def ack(self, alert_id: Any) -> None:
         url = f"{self.base}/alerts/{alert_id}/ack"
@@ -190,9 +226,17 @@ class _Agent:
             await self.popup("Could not send “I'm on it” — check the dashboard")
 
     def on_ack(self, msg: dict[str, Any]) -> None:
-        self.alarm.stop()
+        event_id = msg.get("event_id")
+        key = ("event", event_id)
+        if event_id is None or key not in self.known:
+            return  # someone else's alert (or their test alert): not ours to silence
+        del self.known[key]
+        if key in self.sounding:
+            self.sounding.discard(key)
+            if not self.sounding:
+                self.alarm.stop()
         by = msg.get("by_email")
-        if by and by != self.cfg.email:
+        if by and not self._is_me(msg):
             log.info("%s is handling it", by)
             self.spawn(self.popup(f"{by} is handling it"))
 
@@ -257,7 +301,10 @@ async def _connection_loop(
                 connected_at = clock()
                 log.info("connected to %s", agent.base)
                 async for raw in messages:
-                    await agent.handle(raw)
+                    try:
+                        await agent.handle(raw)
+                    except Exception as e:  # noqa: BLE001  one bad message never costs the link
+                        log.error("handling a message failed: %s", type(e).__name__)
         except ConnectionClosed as e:
             code = e.code
         except (OSError, httpx.HTTPError) as e:

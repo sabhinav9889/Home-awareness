@@ -23,10 +23,13 @@ output** — the headphones while they are in use — for at most 30 s.
     ha-agent run          # Ctrl-C (or SIGTERM) stops any alarm and exits 0
     ha-agent test-alarm   # plays the alarm for 3 s
 
-- `login` stores only the access token (valid 24 h) in `agent.json`; the password is never
+- `login` stores only the access token (valid 24 h) and your member id in `agent.json`; the password is never
   stored, printed or logged, and neither is the token.
 - Popup buttons: **I'm on it** (acknowledges for the household and stops the alarm) and
-  **Stop alarm**. When someone else acknowledges, the alarm stops and you see who.
+  **Stop alarm** (either one silences the alarm). When someone acknowledges an alert you
+  received, you see who, and the alarm stops once every alert it is sounding for has been
+  acknowledged. Acks for other members' alerts (including their test alerts) are ignored.
+  A new alarm alert while one sounds restarts the 30 s window.
   The popup is shown even when only the alarm is enabled — it is the stop button.
 - Without a session D-Bus/notification server, alerts are printed in the terminal instead;
   without button support, the alarm stops after 30 s or on Ctrl-C.
