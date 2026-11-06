@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -187,15 +188,25 @@ class EventQueue:
                 self._overflow_logged = True
                 log.warning("event queue full (%d); dropping oldest events", self._max_items)
 
+    def retain(self, keep: Callable[[str], bool]) -> None:
+        """Drop queued events whose sound fails ``keep`` (e.g. no longer enabled)."""
+        self._items = deque(i for i in self._items if keep(i.sound))
+
     def _pop_if_head(self, item: _Pending) -> None:
         # A put() during an awaited send may have evicted this item at the cap.
         if self._items and self._items[0] is item:
             self._items.popleft()
 
-    async def drain(self, client: ServerClient, now: datetime) -> int:
+    async def drain(
+        self,
+        client: ServerClient,
+        now: datetime,
+        allow: Callable[[str], bool] | None = None,
+    ) -> int:
         """Send oldest first; return the number delivered.
 
-        Stale items (older than max_age_s) and Rejected items are dropped.
+        Stale items (older than max_age_s), items whose sound fails ``allow`` and
+        Rejected items are dropped.
         ServerUnavailable and RateLimited propagate with the failed item (and the rest)
         kept; the caller backs off (RateLimited.retry_after_s). DeviceRevoked propagates.
         """
@@ -204,6 +215,9 @@ class EventQueue:
             item = self._items[0]
             if item.occurred_at.utcoffset() is None or now - item.occurred_at > self._max_age:
                 self._pop_if_head(item)  # naive (should be impossible) or stale
+                continue
+            if allow is not None and not allow(item.sound):
+                self._pop_if_head(item)
                 continue
             try:
                 await client.send_event(item.sound, item.confidence, item.occurred_at)

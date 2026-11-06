@@ -302,3 +302,49 @@ async def test_mic_failing_to_open_exits_4():
     task, _stop = start(FakeClient(), mic=BrokenMic())
     async with asyncio.timeout(2):
         assert await task == EXIT_MIC_LOST
+
+
+SIREN = NAMES.index("Siren")
+
+
+async def test_queued_event_for_sound_disabled_by_heartbeat_is_never_sent():
+    class OutageClient(FakeClient):
+        """Server is down for sends until the second heartbeat (which drops siren)."""
+
+        def __init__(self):
+            super().__init__(
+                [DeviceConfig(frozenset({"siren"}), 60), DeviceConfig(frozenset({"doorbell"}), 60)]
+            )
+            self.second_done = False
+            self.failed_sends = 0
+
+        async def heartbeat(self):
+            if self.heartbeats >= 1:
+                while self.failed_sends < 3:  # let siren events pile up in the queue
+                    await asyncio.sleep(0.001)
+            cfg = await super().heartbeat()
+            if self.heartbeats >= 2:
+                self.second_done = True
+            return cfg
+
+        async def send_event(self, sound, confidence, occurred_at):
+            if not self.second_done:
+                self.failed_sends += 1
+                raise ServerUnavailable("down")
+            self.sent.append((sound, confidence, occurred_at))
+
+    client = OutageClient()
+    task, stop = start(client, classifier=FakeClassifier(hot=(SIREN, DOORBELL)))
+    await until(lambda: client.sent)
+    await asyncio.sleep(0.05)
+    assert await finish(task, stop) == EXIT_OK
+    assert {s for s, _, _ in client.sent} == {"doorbell"}
+
+
+async def test_heartbeat_interval_clamped_to_at_least_1s():
+    slept = []
+    client = FakeClient([DeviceConfig(frozenset({"doorbell"}), 0)])
+    task, stop = start(client, sleep=fast_sleep(slept))
+    await until(lambda: client.heartbeats >= 3)
+    await finish(task, stop)
+    assert 0 not in slept and slept.count(1) >= 2

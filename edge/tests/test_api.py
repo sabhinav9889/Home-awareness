@@ -259,3 +259,34 @@ async def test_send_event_202_with_bad_body_counts_as_delivered(client):
     q.put("a", 0.5, NOW)
     assert await q.drain(client, NOW) == 1
     assert len(q) == 0
+
+
+async def test_retain_keeps_only_matching_items_in_order():
+    q = EventQueue()
+    for s in ("siren", "doorbell", "siren", "scream"):
+        q.put(s, 0.5, NOW)
+    q.retain(lambda sound: sound != "siren")
+    sent = []
+
+    class Fake:
+        async def send_event(self, sound, conf, at):
+            sent.append(sound)
+            return EventResult(1, False, 0)
+
+    assert await q.drain(Fake(), NOW) == 2
+    assert sent == ["doorbell", "scream"]
+
+
+async def test_drain_skips_disallowed_sounds():
+    q = EventQueue()
+    q.put("siren", 0.5, NOW)
+    q.put("doorbell", 0.5, NOW)
+    sent = []
+
+    class Fake:
+        async def send_event(self, sound, conf, at):
+            sent.append(sound)
+            return EventResult(1, False, 0)
+
+    assert await q.drain(Fake(), NOW, allow=lambda s: s == "doorbell") == 1
+    assert sent == ["doorbell"] and len(q) == 0

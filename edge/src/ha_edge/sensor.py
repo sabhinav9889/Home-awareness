@@ -87,6 +87,8 @@ async def run_sensor(
                     playing = await asyncio.to_thread(probe.playing)
                     for d in detector.process(scores, monotonic(), enabled, playing):
                         log.info("detected %s (%.2f)", d.sound, d.confidence)
+                        # Stamped after inference: lags the sound by a few ms (plus the
+                        # window length), well within the server's tolerance.
                         queue.put(d.sound, d.confidence, now())
         except MicLost as e:
             log.error("Microphone lost: %s. Not switching to another input; stopping.", e)
@@ -98,7 +100,7 @@ async def run_sensor(
 
     async def heartbeat_task() -> None:
         nonlocal enabled
-        interval: float | None = None  # None until the first success
+        interval: int | None = None  # None until the first success
         while True:
             try:
                 dc = await client.heartbeat()
@@ -116,14 +118,16 @@ async def run_sensor(
             if dc.enabled_sounds != enabled or interval is None:
                 log.info("enabled sounds: %s", ", ".join(sorted(dc.enabled_sounds)) or "none")
             enabled = dc.enabled_sounds
-            interval = float(dc.heartbeat_interval_s)
-            await sleep(dc.heartbeat_interval_s)
+            # Events queued for a sound that is no longer enabled must never be sent.
+            queue.retain(dc.enabled_sounds.__contains__)
+            interval = max(1, dc.heartbeat_interval_s)
+            await sleep(interval)
 
     async def drain_task() -> None:
         backoff = 1.0
         while True:
             try:
-                sent = await queue.drain(client, now())
+                sent = await queue.drain(client, now(), allow=lambda sound: sound in enabled)
             except DeviceRevoked:
                 log.error(REVOKED_MESSAGE)
                 fatal(EXIT_REVOKED)
