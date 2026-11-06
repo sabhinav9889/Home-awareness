@@ -16,6 +16,7 @@ from ha_edge.api import (
     Rejected,
     ServerClient,
     ServerUnavailable,
+    _Pending,
 )
 
 BASE = "http://srv.test"
@@ -190,3 +191,71 @@ async def test_queue_cap_drops_oldest_and_logs_once(caplog):
     assert len(q) == 500
     assert q.oldest_occurred_at() == NOW + timedelta(seconds=5)
     assert len([r for r in caplog.records if "queue full" in r.getMessage()]) == 1
+
+
+NAIVE = datetime(2026, 11, 7, 12, 0, 0)
+
+
+def test_queue_put_rejects_naive_datetime():
+    with pytest.raises(ValueError):
+        EventQueue().put("a", 0.5, NAIVE)
+
+
+@respx.mock
+async def test_send_event_rejects_naive_datetime(client):
+    with pytest.raises(ValueError):
+        await client.send_event("a", 0.5, NAIVE)
+    assert not respx.calls
+
+
+async def test_drain_drops_naive_item_defensively():
+    q = EventQueue()
+    q._items.append(_Pending("a", 0.5, NAIVE))
+
+    class Fake:
+        async def send_event(self, *a):
+            raise AssertionError("must not send")
+
+    assert await q.drain(Fake(), NOW) == 0
+    assert len(q) == 0
+
+
+async def test_drain_does_not_discard_other_item_on_concurrent_put():
+    q = EventQueue(max_items=2)
+    q.put("a", 0.5, NOW)
+    q.put("b", 0.5, NOW)
+    sent = []
+
+    class Fake:
+        async def send_event(self, sound, conf, at):
+            sent.append(sound)
+            if sound == "a":
+                q.put("c", 0.5, NOW)  # evicts "a" at the cap while it is in flight
+            return EventResult(1, False, 0)
+
+    assert await q.drain(Fake(), NOW) == 3
+    assert sent == ["a", "b", "c"]
+
+
+@respx.mock
+async def test_heartbeat_malformed_body_raises_server_unavailable(client):
+    respx.post(f"{BASE}/device/heartbeat").respond(200, json={"nope": 1})
+    with pytest.raises(ServerUnavailable):
+        await client.heartbeat()
+
+
+@respx.mock
+async def test_pair_malformed_body_raises_server_unavailable():
+    respx.post(f"{BASE}/device/pair").respond(201, content=b"not json")
+    with pytest.raises(ServerUnavailable):
+        await ServerClient(BASE).pair("x")
+
+
+@respx.mock
+async def test_send_event_202_with_bad_body_counts_as_delivered(client):
+    respx.post(f"{BASE}/device/events").respond(202, content=b"garbage")
+    assert (await client.send_event("a", 0.5, NOW)).event_id == -1
+    q = EventQueue()
+    q.put("a", 0.5, NOW)
+    assert await q.drain(client, NOW) == 1
+    assert len(q) == 0

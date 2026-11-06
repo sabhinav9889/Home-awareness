@@ -117,17 +117,27 @@ class ServerClient:
             raise PairingFailed(_detail(resp) or "invalid or expired pairing code")
         if resp.status_code != 201:
             raise Rejected(_detail(resp) or f"HTTP {resp.status_code}")
-        data = resp.json()
-        return int(data["device_id"]), str(data["device_key"])
+        try:
+            data = resp.json()
+            return int(data["device_id"]), str(data["device_key"])
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise ServerUnavailable("malformed pair response") from None
 
     async def heartbeat(self) -> DeviceConfig:
         resp = await self._post("/device/heartbeat")
         if resp.status_code != 200:
             raise Rejected(_detail(resp) or f"HTTP {resp.status_code}")
-        data = resp.json()
-        return DeviceConfig(frozenset(data["enabled_sounds"]), int(data["heartbeat_interval_s"]))
+        try:
+            data = resp.json()
+            return DeviceConfig(
+                frozenset(data["enabled_sounds"]), int(data["heartbeat_interval_s"])
+            )
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise ServerUnavailable("malformed heartbeat response") from None
 
     async def send_event(self, sound: str, confidence: float, occurred_at: datetime) -> EventResult:
+        if occurred_at.utcoffset() is None:
+            raise ValueError("occurred_at must be timezone-aware")
         body = {
             "type": sound,
             "confidence": confidence,
@@ -136,8 +146,13 @@ class ServerClient:
         resp = await self._post("/device/events", body)
         if resp.status_code != 202:
             raise Rejected(_detail(resp) or f"HTTP {resp.status_code}")
-        data = resp.json()
-        return EventResult(int(data["event_id"]), bool(data["merged"]), int(data["alerts"]))
+        # 202 means the server accepted the event. If the body is unreadable, still report
+        # success (event_id=-1) so the queue does not resend and create a duplicate.
+        try:
+            data = resp.json()
+            return EventResult(int(data["event_id"]), bool(data["merged"]), int(data["alerts"]))
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return EventResult(-1, False, 0)
 
 
 @dataclass(frozen=True)
@@ -163,12 +178,19 @@ class EventQueue:
         return self._items[0].occurred_at if self._items else None
 
     def put(self, sound: str, conf: float, occurred_at: datetime) -> None:
+        if occurred_at.utcoffset() is None:
+            raise ValueError("occurred_at must be timezone-aware")
         self._items.append(_Pending(sound, conf, occurred_at))
         while len(self._items) > self._max_items:
             self._items.popleft()
             if not self._overflow_logged:
                 self._overflow_logged = True
                 log.warning("event queue full (%d); dropping oldest events", self._max_items)
+
+    def _pop_if_head(self, item: _Pending) -> None:
+        # A put() during an awaited send may have evicted this item at the cap.
+        if self._items and self._items[0] is item:
+            self._items.popleft()
 
     async def drain(self, client: ServerClient, now: datetime) -> int:
         """Send oldest first; return the number delivered.
@@ -180,15 +202,15 @@ class EventQueue:
         sent = 0
         while self._items:
             item = self._items[0]
-            if now - item.occurred_at > self._max_age:
-                self._items.popleft()
+            if item.occurred_at.utcoffset() is None or now - item.occurred_at > self._max_age:
+                self._pop_if_head(item)  # naive (should be impossible) or stale
                 continue
             try:
                 await client.send_event(item.sound, item.confidence, item.occurred_at)
             except Rejected:
-                self._items.popleft()
+                self._pop_if_head(item)
                 continue
-            self._items.popleft()
+            self._pop_if_head(item)
             sent += 1
         if not self._items:
             self._overflow_logged = False
