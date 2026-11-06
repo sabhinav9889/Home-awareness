@@ -407,3 +407,25 @@ def test_pair_404_says_check_the_server_url(cfgdir, capsys):
     err = capsys.readouterr().err
     assert "404" in err and "check the server URL" in err
     assert "cannot reach" not in err
+
+
+def test_agent_run_warns_when_the_stored_login_is_about_to_expire(cfgdir, monkeypatch, caplog):
+    import base64
+    import time
+
+    from ha_edge import agent
+
+    def b64(obj):
+        return base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b"=").decode()
+
+    token = f"{b64({'alg': 'HS256'})}.{b64({'sub': '1', 'exp': int(time.time()) + 3600})}.sig"
+    config.save_agent(config.AgentConfig("http://srv", "a@b.c", token))
+
+    async def fake_run_agent(cfg, **kw):
+        return 0
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    caplog.set_level(logging.INFO)
+    assert cli.agent_main(["run"]) == 0
+    assert "less than 2 h" in caplog.text
+    assert token not in caplog.text

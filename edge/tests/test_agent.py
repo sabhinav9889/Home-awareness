@@ -681,3 +681,56 @@ async def test_popup_only_alert_offers_only_im_on_it():
     assert notifier.popups[0][2] == ["I'm on it"]
     stop.set()
     await task
+
+
+# --- login expiry (M8) ------------------------------------------------------------------
+
+
+def _jwt(payload):
+    import base64
+
+    def b64(obj):
+        raw = json.dumps(obj).encode()
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    return f"{b64({'alg': 'HS256', 'typ': 'JWT'})}.{b64(payload)}.c2lnbmF0dXJl"
+
+
+NOW_TS = datetime(2026, 11, 7, 12, 0, tzinfo=UTC)
+
+
+def test_login_expiry_decodes_exp_without_verifying():
+    from ha_edge.agent import login_expiry
+
+    exp = int(NOW_TS.timestamp()) + 3600
+    assert login_expiry(_jwt({"sub": "1", "exp": exp})) == datetime.fromtimestamp(exp, UTC)
+    assert login_expiry("not-a-jwt") is None
+    assert login_expiry(_jwt({"sub": "1"})) is None
+    assert login_expiry("a.!!!.c") is None
+
+
+@pytest.mark.parametrize(
+    ("hours_left", "level", "text"),
+    [
+        (20, logging.INFO, "stored login expires"),
+        (1.5, logging.WARNING, "less than 2 h"),
+        (-1, logging.WARNING, "has expired"),
+    ],
+)
+def test_log_login_expiry(caplog, hours_left, level, text):
+    from ha_edge.agent import log_login_expiry
+
+    caplog.set_level(logging.DEBUG)
+    token = _jwt({"sub": "1", "exp": int(NOW_TS.timestamp() + hours_left * 3600)})
+    log_login_expiry(token, NOW_TS)
+    (rec,) = caplog.records
+    assert rec.levelno == level and text in rec.getMessage()
+    assert token not in caplog.text and token.split(".")[1] not in caplog.text
+
+
+def test_log_login_expiry_unreadable_token_says_nothing_secret(caplog):
+    from ha_edge.agent import log_login_expiry
+
+    caplog.set_level(logging.DEBUG)
+    log_login_expiry(TOKEN, NOW_TS)
+    assert TOKEN not in caplog.text

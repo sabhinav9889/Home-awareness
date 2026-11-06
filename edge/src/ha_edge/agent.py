@@ -7,6 +7,8 @@ the ack request's Authorization header. It is never logged: logs name the base U
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import json
 import logging
@@ -14,7 +16,7 @@ import random
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from urllib.parse import quote
 
@@ -33,6 +35,7 @@ BACKOFF_START_S = 1.0
 BACKOFF_MAX_S = 60.0
 BACKOFF_JITTER = 0.2
 STABLE_AFTER_S = 60.0  # a connection up this long resets the backoff
+LOGIN_WARN_LEFT = timedelta(hours=2)
 
 IM_ON_IT = "I'm on it"
 STOP_ALARM = "Stop alarm"
@@ -95,6 +98,39 @@ def ws_connector(http: httpx.AsyncClient | None, aconnect: Any = None) -> Connec
             raise _unwrap(eg) from None
 
     return connect
+
+
+def login_expiry(token: str) -> datetime | None:
+    """The ``exp`` of a JWT, read WITHOUT verifying it (only to tell the user); else None."""
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        exp = claims["exp"]
+        if isinstance(exp, bool) or not isinstance(exp, int | float):
+            return None
+        return datetime.fromtimestamp(exp, UTC)
+    except (IndexError, ValueError, KeyError, TypeError, binascii.Error, OverflowError, OSError):
+        return None
+
+
+def log_login_expiry(token: str, now: datetime) -> None:
+    """Log when the stored login runs out (never the token itself)."""
+    exp = login_expiry(token)
+    if exp is None:
+        log.info("cannot tell when the stored login expires")
+        return
+    local = exp.astimezone().strftime("%Y-%m-%d %H:%M")
+    left = exp - now
+    if left <= timedelta(0):
+        log.warning("the stored login has expired (%s): run `ha-agent login` again", local)
+    elif left < LOGIN_WARN_LEFT:
+        log.warning(
+            "the stored login expires at %s, less than 2 h from now: "
+            "run `ha-agent login` again soon or alerts will stop reaching this laptop",
+            local,
+        )
+    else:
+        log.info("the stored login expires at %s", local)
 
 
 def _hhmm(at: Any) -> str:

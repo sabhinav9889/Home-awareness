@@ -283,6 +283,9 @@ def _cmd_agent_run(args: argparse.Namespace) -> int:
         _err("Not logged in. Run `ha-agent login --server URL --email EMAIL` first.")
         return EXIT_NOT_LOGGED_IN
     _setup_logging()
+    from datetime import UTC, datetime
+
+    agent.log_login_expiry(cfg.access_token, datetime.now(UTC))
 
     async def main() -> int:
         stop = asyncio.Event()
