@@ -184,8 +184,8 @@ async def test_publish_never_raises_on_redis_failure():
         async def publish(self, *a):
             raise ConnectionError("down")
 
-    await publish_to_member(Broken(), 1, {"kind": "x"})
-    await publish_to_household(Broken(), 1, {"kind": "x"})
+    assert await publish_to_member(Broken(), 1, {"kind": "x"}) == 0
+    assert await publish_to_household(Broken(), 1, {"kind": "x"}) == 0
     from app.live.hub import publish_disconnect
 
     await publish_disconnect(Broken(), [1, 2])
@@ -278,3 +278,14 @@ async def test_ack_other_households_alert_404(client, two_households):
     aid = (await client.post("/me/test-alert", headers=headers_a)).json()["alert_id"]
     r = await client.post(f"/alerts/{aid}/ack", headers=headers_b)
     assert r.status_code == 404 and r.json() == {"detail": "not found"}
+
+
+async def test_publish_returns_live_listener_count(redis):
+    assert await publish_to_member(redis, 1, {"kind": "x"}) == 0
+    ps = redis.pubsub()
+    await ps.subscribe("live:member:1")
+    try:
+        assert await publish_to_member(redis, 1, {"kind": "x"}) == 1
+    finally:
+        await ps.unsubscribe()
+        await ps.aclose()

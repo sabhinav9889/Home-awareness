@@ -51,13 +51,17 @@ def factory(session):
 
 @pytest.fixture
 def published(monkeypatch):
-    calls = []
-
     async def fake(redis, member_id, msg):
         calls.append((member_id, msg))
+        return calls.listeners
 
+    calls = _Published()
     monkeypatch.setattr(delivery, "publish_to_member", fake)
     return calls
+
+
+class _Published(list):
+    listeners = 1  # one open dashboard tab by default; set to 0 for "nobody listening"
 
 
 async def _no_sleep(_s):
@@ -379,3 +383,32 @@ async def test_test_alert_rate_limited_4th_429(client, signed_up, jobs):
     assert codes == [202, 202, 202, 429]
     _, h2 = await signed_up(email="z@example.com", household_name="Z")
     assert (await client.post("/me/test-alert", headers=h2)).status_code == 202
+
+
+@respx.mock
+async def test_websocket_without_live_listener_is_failed_not_sent(
+    signed_up, session, factory, redis, published
+):
+    member, _ = await signed_up()
+    await _prefs(session, member, ntfy_topic="t")
+    alert = await _alert(session, member)
+    respx.post("https://ntfy.test/t").mock(return_value=httpx.Response(200))
+    published.listeners = 0
+    await _run(alert, factory, redis)
+    d = await _deliveries(session, alert.id)
+    assert d["websocket"].status == "failed" and d["websocket"].last_error == "no live listener"
+    assert d["ntfy"].status == "sent"
+    await session.refresh(alert)
+    assert alert.status == "partial"
+
+
+async def test_websocket_only_and_nobody_listening_fails_alert(
+    signed_up, session, factory, redis
+):
+    member, _ = await signed_up()  # defaults: popup only; real (fake)redis, no subscriber
+    alert = await _alert(session, member)
+    await _run(alert, factory, redis)
+    d = await _deliveries(session, alert.id)
+    assert d["websocket"].status == "failed" and d["websocket"].last_error == "no live listener"
+    await session.refresh(alert)
+    assert alert.status == "failed"

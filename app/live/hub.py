@@ -1,4 +1,5 @@
-"""Live fan-out over Redis pub/sub. Publishes are best-effort: they never raise."""
+"""Live fan-out over Redis pub/sub. Publishes are best-effort: they never raise, and
+return how many live subscribers received the message (0 on any Redis error)."""
 
 import json
 import logging
@@ -16,19 +17,20 @@ def household_channel(household_id: int) -> str:
     return f"live:household:{household_id}"
 
 
-async def _publish(redis: Redis, channel: str, msg: dict) -> None:
+async def _publish(redis: Redis, channel: str, msg: dict) -> int:
     try:
-        await redis.publish(channel, json.dumps(msg, default=str))
+        return int(await redis.publish(channel, json.dumps(msg, default=str)))
     except Exception:  # noqa: BLE001  a Redis hiccup must not fail an already-committed request
         log.warning("live publish to %s failed", channel, exc_info=True)
+        return 0
 
 
-async def publish_to_member(redis: Redis, member_id: int, msg: dict) -> None:
-    await _publish(redis, member_channel(member_id), msg)
+async def publish_to_member(redis: Redis, member_id: int, msg: dict) -> int:
+    return await _publish(redis, member_channel(member_id), msg)
 
 
-async def publish_to_household(redis: Redis, household_id: int, msg: dict) -> None:
-    await _publish(redis, household_channel(household_id), msg)
+async def publish_to_household(redis: Redis, household_id: int, msg: dict) -> int:
+    return await _publish(redis, household_channel(household_id), msg)
 
 
 async def publish_disconnect(redis: Redis, member_ids: list[int]) -> None:

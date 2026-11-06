@@ -21,6 +21,7 @@ from app.tenancy import Tenant
 TEST_TEXT = "🔔 Test alert from Home Awareness — your alerts work."
 BACKOFF = (1, 4)  # seconds slept after attempt 1 and 2; 3 attempts in total
 MAX_ERROR = 500
+NO_LISTENER = "no live listener"
 
 
 def _default_session_factory():
@@ -104,7 +105,7 @@ async def deliver_alert(
             label = get_sound(alert.sound_key).label
             text = f"⚠️ {label} detected by {device_name} at {at:%H:%M} UTC — Home Awareness"
 
-        Send = Callable[[], Awaitable[None]]
+        Send = Callable[[], Awaitable[object]]
         plan: list[tuple[Delivery, Send | None]] = []  # None: nothing to send (pre-failed)
 
         def new(channel: str, send: Send | None) -> None:
@@ -144,10 +145,15 @@ async def deliver_alert(
             if send is None:
                 d.status, d.last_error = "failed", "telegram bot token not configured"
             elif d.channel == "websocket":
-                d.attempts = 1  # no retries: "sent" means published
+                # No retries. "sent" means at least one live dashboard received it: a popup or
+                # alarm nobody is listening for reached no one, so it must not count as sent.
+                d.attempts = 1
                 try:
-                    await send()
-                    d.status = "sent"
+                    listeners = await send()
+                    if listeners:
+                        d.status = "sent"
+                    else:
+                        d.status, d.last_error = "failed", NO_LISTENER
                 except Exception as e:
                     d.status, d.last_error = "failed", (str(e) or type(e).__name__)[:MAX_ERROR]
             else:
