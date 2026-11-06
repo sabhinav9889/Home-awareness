@@ -190,6 +190,8 @@ async def _deliver_claimed(
         new("ntfy", lambda: ntfy.publish(http, settings.ntfy_base_url, topic, text))
     await session.commit()  # every Delivery row exists (pending) before anything is sent
 
+    # Websocket first (instant, local), plus channels that can't be sent at all.
+    external: list[tuple[Delivery, Send]] = []
     for d, send in plan:
         if send is None:
             d.status, d.last_error = "failed", "telegram bot token not configured"
@@ -206,9 +208,33 @@ async def _deliver_claimed(
             except Exception as e:
                 d.status, d.last_error = "failed", (str(e) or type(e).__name__)[:MAX_ERROR]
         else:
-            await _send_with_retries(d, send, sleep, (token,) if token else ())
-        await session.commit()  # persist each channel's outcome before the next send
+            external.append((d, send))
+            continue
+        await session.commit()
         DELIVERIES.labels(d.channel, d.status).inc()
+
+    # External channels run concurrently, so a slow Telegram (up to ~35 s with retries)
+    # never holds back ntfy. The sends only touch their own Delivery object in memory; all
+    # session I/O stays in this task, committing each outcome as it completes.
+    secrets = (token,) if token else ()
+
+    async def attempt(d: Delivery, send: Send) -> tuple[Delivery, Exception | None]:
+        try:
+            await _send_with_retries(d, send, sleep, secrets)
+        except Exception as e:  # noqa: BLE001  re-raised below, after the others finish
+            return d, e
+        return d, None
+
+    crash: Exception | None = None
+    for done in asyncio.as_completed([attempt(d, send) for d, send in external]):
+        d, error = await done
+        if error is not None:
+            crash = crash or error
+            continue  # left pending: the abort path marks it failed
+        await session.commit()
+        DELIVERIES.labels(d.channel, d.status).inc()
+    if crash is not None:
+        raise crash
 
     ok = sum(d.status == "sent" for d, _ in plan)
     if ok == 0:

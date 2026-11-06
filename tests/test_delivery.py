@@ -460,3 +460,37 @@ async def test_alert_just_under_10_minutes_still_delivers(
     await _run(alert, factory, redis, age=timedelta(minutes=9, seconds=59))
     await session.refresh(alert)
     assert alert.status == "sent" and len(published) == 1
+
+
+async def test_slow_telegram_does_not_delay_ntfy(signed_up, session, factory, redis, monkeypatch):
+    member, _ = await signed_up()
+    await _prefs(session, member, telegram=True, telegram_chat_id="42", ntfy_topic="t")
+    alert = await _alert(session, member)
+    order = []
+    ntfy_sent = asyncio.Event()
+
+    async def ws(redis, member_id, msg):
+        order.append("websocket")
+        return 1
+
+    async def slow_telegram(http, token, chat_id, text):
+        order.append("telegram-start")
+        await asyncio.wait_for(ntfy_sent.wait(), timeout=0.5)  # sequential sending times out
+        order.append("telegram")
+
+    async def fast_ntfy(http, base, topic, text):
+        order.append("ntfy")
+        ntfy_sent.set()
+
+    monkeypatch.setattr(delivery, "publish_to_member", ws)
+    monkeypatch.setattr(delivery.telegram, "send_message", slow_telegram)
+    monkeypatch.setattr(delivery.ntfy, "publish", fast_ntfy)
+    await _run(alert, factory, redis)
+    assert order[0] == "websocket" and order[-1] == "telegram"  # telegram finished last
+    assert sorted(order[1:3]) == ["ntfy", "telegram-start"]  # ntfy didn't wait for it
+    d = await _deliveries(session, alert.id)
+    assert {c: x.status for c, x in d.items()} == {
+        "websocket": "sent", "telegram": "sent", "ntfy": "sent"
+    }  # fmt: skip
+    await session.refresh(alert)
+    assert alert.status == "sent"
