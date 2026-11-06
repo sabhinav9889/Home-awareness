@@ -671,3 +671,13 @@ async def test_alert_evicted_from_known_stops_its_alarm():
     assert alarm.plays == 1
     stop.set()
     await task
+
+
+async def test_popup_only_alert_offers_only_im_on_it():
+    server = FakeServer(([_alert(7, 3, alarm=False)], HANG))
+    notifier, alarm = FakeNotifier(), FakeAlarm()
+    stop, task = _start(server, notifier, alarm)
+    await _until(lambda: notifier.popups)
+    assert notifier.popups[0][2] == ["I'm on it"]
+    stop.set()
+    await task

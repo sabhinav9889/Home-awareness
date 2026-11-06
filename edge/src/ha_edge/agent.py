@@ -186,7 +186,10 @@ class _Agent:
             self.known[key] = None
         # Popup first, so a failing alarm can never cost the alert. It is shown even when
         # only the alarm was asked for: it is the stop button.
-        self.spawn(self._alert_popup(key, msg.get("alert_id"), title, _hhmm(msg.get("at"))))
+        actions = [IM_ON_IT, STOP_ALARM] if msg.get("alarm") else [IM_ON_IT]
+        self.spawn(
+            self._alert_popup(key, msg.get("alert_id"), title, _hhmm(msg.get("at")), actions)
+        )
         try:
             if msg.get("alarm"):
                 await self._ring(key)
@@ -219,9 +222,14 @@ class _Agent:
                     self.alarm.stop()
 
     async def _alert_popup(
-        self, key: tuple[str, int] | None, alert_id: Any, title: str, hhmm: str
+        self,
+        key: tuple[str, int] | None,
+        alert_id: Any,
+        title: str,
+        hhmm: str,
+        actions: list[str],
     ) -> None:
-        action = await self.popup(title, f"{hhmm} · {FOOTER}", [IM_ON_IT, STOP_ALARM])
+        action = await self.popup(title, f"{hhmm} · {FOOTER}", actions)
         if action in (STOP_ALARM, IM_ON_IT):
             # A button press is the user, at this laptop: silence it outright.
             self.sounding.clear()
