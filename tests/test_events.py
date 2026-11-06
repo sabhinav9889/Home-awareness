@@ -203,3 +203,17 @@ async def test_device_tenant_cannot_touch_other_household(
         select(func.count()).select_from(Event).where(Event.household_id == b_household)
     )
     assert total == 0
+
+
+async def test_household_event_rate_limit_301st_429(client, signed_up, frozen_ratelimit_clock):
+    _, h = await signed_up()
+    keys = [(await _device(client, h, name=f"D{i}"))[1] for i in range(6)]
+    for dk in keys[:5]:  # 5 devices x 60 = the household's 300 per minute
+        for _ in range(60):
+            r = await client.post("/device/events", json=_body(), headers=dk)
+            assert r.status_code == 202
+    r = await client.post("/device/events", json=_body(), headers=keys[5])  # own budget unused
+    assert r.status_code == 429 and int(r.headers["Retry-After"]) > 0
+    _, h_other = await signed_up(email="other@example.com", household_name="Other")
+    _, dk_other = await _device(client, h_other)
+    assert (await client.post("/device/events", json=_body(), headers=dk_other)).status_code == 202

@@ -34,25 +34,30 @@ def by_member(request: Request) -> str:
         return hash_token(header)
 
 
+async def enforce(redis: Redis, scope: str, key: str, limit: int, per_seconds: int) -> None:
+    """Count one hit for `key` in the current fixed window; HTTP 429 once over `limit`."""
+    current = now()
+    window = int(current) // per_seconds
+    name = f"rl:{scope}:{key}:{window}"
+    # One round trip; the key is per-window, so refreshing its TTL every call is harmless.
+    # No MULTI/EXEC: INCR is atomic on its own and the EXPIRE needn't be in the same tx.
+    async with redis.pipeline(transaction=False) as pipe:
+        pipe.incr(name)
+        pipe.expire(name, per_seconds)
+        count, _ = await pipe.execute()
+    if count > limit:
+        retry_after = max(1, math.ceil((window + 1) * per_seconds - current))
+        raise HTTPException(
+            status_code=429,
+            detail="rate limit exceeded",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
 def rate_limit(
     scope: str, limit: int, per_seconds: int, key: Callable[[Request], str]
 ) -> Callable[..., Awaitable[None]]:
     async def dependency(request: Request, redis: Annotated[Redis, Depends(get_redis)]) -> None:
-        current = now()
-        window = int(current) // per_seconds
-        name = f"rl:{scope}:{key(request)}:{window}"
-        # One round trip; the key is per-window, so refreshing its TTL every call is harmless.
-        # No MULTI/EXEC: INCR is atomic on its own and the EXPIRE needn't be in the same tx.
-        async with redis.pipeline(transaction=False) as pipe:
-            pipe.incr(name)
-            pipe.expire(name, per_seconds)
-            count, _ = await pipe.execute()
-        if count > limit:
-            retry_after = max(1, math.ceil((window + 1) * per_seconds - current))
-            raise HTTPException(
-                status_code=429,
-                detail="rate limit exceeded",
-                headers={"Retry-After": str(retry_after)},
-            )
+        await enforce(redis, scope, key(request), limit, per_seconds)
 
     return dependency

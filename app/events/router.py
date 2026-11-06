@@ -15,7 +15,7 @@ from app.events.models import Event
 from app.events.schemas import EventAccepted, EventIn, EventOut
 from app.live.hub import publish_to_household
 from app.metrics import ALERTS_CREATED, EVENTS_MERGED, EVENTS_RECEIVED
-from app.ratelimit import by_device_key, rate_limit
+from app.ratelimit import by_device_key, enforce, rate_limit
 from app.redis import get_redis
 from app.rules.engine import RuleOutcome, process_event
 from app.tenancy import Tenant, get_tenant
@@ -24,12 +24,28 @@ DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emer
 
 router = APIRouter(tags=["events"])
 
+HOUSEHOLD_EVENTS_PER_MINUTE = 300
+
+
+async def _household_event_limit(
+    device: Annotated[Device, Depends(current_device)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> None:
+    """Spec §9: a household's sensors together send at most 300 events a minute (runs after
+    device auth; FastAPI reuses the same current_device result for the route)."""
+    await enforce(
+        redis, "events-household", str(device.household_id), HOUSEHOLD_EVENTS_PER_MINUTE, 60
+    )
+
 
 @router.post(
     "/device/events",
     status_code=202,
     response_model=EventAccepted,
-    dependencies=[Depends(rate_limit("events", 60, 60, by_device_key))],
+    dependencies=[
+        Depends(rate_limit("events", 60, 60, by_device_key)),
+        Depends(_household_event_limit),
+    ],
     description=f"Report a detected sound (type, confidence, time; never audio). {DISCLAIMER}",
 )
 async def post_event(
