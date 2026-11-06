@@ -157,8 +157,9 @@ async def test_delivers_to_all_enabled_channels(signed_up, session, factory, red
     ((member_id, msg),) = published
     assert member_id == member.id
     assert msg == {
-        "kind": "alert", "alert_id": alert.id, "sound_key": "scream", "label": "Scream",
-        "device_name": "Hall", "at": "2026-11-07T14:05:30+00:00", "popup": True, "alarm": True,
+        "kind": "alert", "alert_id": alert.id, "event_id": alert.event_id,
+        "sound_key": "scream", "label": "Scream", "device_name": "Hall",
+        "at": "2026-11-07T14:05:30+00:00", "popup": True, "alarm": True,
     }  # fmt: skip
 
 
@@ -396,6 +397,7 @@ async def test_test_alert_uses_all_enabled_channels_and_exact_text(
     assert json.loads(tg.calls[0].request.content)["text"] == TEST_TEXT
     assert nt.calls[0].request.content.decode() == TEST_TEXT
     assert set(await _deliveries(session, alert_id)) == {"websocket", "telegram", "ntfy"}
+    assert published[0][1]["event_id"] is None  # agents track test alerts by alert_id
 
 
 async def test_test_alert_rate_limited_4th_429(client, signed_up, jobs):

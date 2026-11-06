@@ -188,6 +188,7 @@ async def _deliver_claimed(
                 {
                     "kind": "alert",
                     "alert_id": alert.id,
+                    "event_id": alert.event_id,  # matches alert_ack.event_id
                     "sound_key": alert.sound_key,
                     "label": label,
                     "device_name": device_name,
