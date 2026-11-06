@@ -232,6 +232,11 @@ def test_agent_login_stores_token_not_password(cfgdir, monkeypatch, capsys, capl
     route = respx.post("http://srv/auth/login").mock(
         return_value=httpx.Response(200, json={"access_token": JWT, "token_type": "bearer"})
     )
+    me = respx.get("http://srv/auth/me").mock(
+        return_value=httpx.Response(
+            200, json={"id": 41, "email": "me@example.com", "role": "owner", "household_id": 2}
+        )
+    )
     rc = cli.agent_main(["login", "--server", "http://srv/", "--email", "me@example.com"])
     assert rc == 0
     assert json.loads(route.calls[0].request.content) == {
@@ -245,7 +250,9 @@ def test_agent_login_stores_token_not_password(cfgdir, monkeypatch, capsys, capl
         "base_url": "http://srv",
         "email": "me@example.com",
         "access_token": JWT,
+        "member_id": 41,
     }
+    assert me.calls[0].request.headers["authorization"] == f"Bearer {JWT}"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     out = capsys.readouterr()
     logs = "\n".join(r.getMessage() for r in caplog.records)
@@ -355,3 +362,23 @@ def test_agent_test_alarm_without_pw_play_exits_1(monkeypatch, capsys):
     monkeypatch.setattr(notify, "AlarmPlayer", Missing)
     assert cli.agent_main(["test-alarm"]) == 1
     assert "pw-play" in capsys.readouterr().err
+
+
+@respx.mock
+def test_agent_login_without_me_still_saves_token(cfgdir, monkeypatch):
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": PASSWORD)
+    respx.post("http://srv/auth/login").mock(
+        return_value=httpx.Response(200, json={"access_token": JWT, "token_type": "bearer"})
+    )
+    respx.get("http://srv/auth/me").mock(return_value=httpx.Response(500))
+    assert cli.agent_main(["login", "--server", "http://srv", "--email", "a@b.c"]) == 0
+    saved = config.load_agent()
+    assert saved.access_token == JWT and saved.member_id is None
+
+
+def test_old_agent_config_without_member_id_loads(cfgdir):
+    (cfgdir / "agent.json").write_text(
+        json.dumps({"base_url": "http://srv", "email": "a@b.c", "access_token": JWT})
+    )
+    saved = config.load_agent()
+    assert saved.member_id is None and saved.access_token == JWT

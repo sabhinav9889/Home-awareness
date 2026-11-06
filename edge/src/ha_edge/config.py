@@ -28,6 +28,7 @@ class AgentConfig:
     base_url: str
     email: str
     access_token: str
+    member_id: int | None = None  # from GET /auth/me; absent in configs saved before it
 
 
 def config_dir() -> Path:

@@ -14,6 +14,7 @@ import signal
 import sys
 import time
 from collections.abc import Sequence
+from typing import Any
 
 DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
 
@@ -207,21 +208,27 @@ def _cmd_fetch_model(args: argparse.Namespace) -> int:
 def _cmd_login(args: argparse.Namespace) -> int:
     import httpx
 
-    from ha_edge import config
-
     base = args.server.rstrip("/")
     try:
         password = getpass.getpass(f"Password for {args.email}: ")
     except (KeyboardInterrupt, EOFError):
         print(file=sys.stderr)
         return EXIT_OK
-    try:
-        with httpx.Client(timeout=15) as http:
+    with httpx.Client(timeout=15) as http:
+        try:
             r = http.post(f"{base}/auth/login", json={"email": args.email, "password": password})
-    except httpx.HTTPError as e:
-        _err(f"Login failed: cannot reach the server at {base} ({type(e).__name__}).")
-        return EXIT_ERROR
-    del password
+        except httpx.HTTPError as e:
+            _err(f"Login failed: cannot reach the server at {base} ({type(e).__name__}).")
+            return EXIT_ERROR
+        del password
+        return _finish_login(http, base, args.email, r)
+
+
+def _finish_login(http: Any, base: str, email: str, r: Any) -> int:
+    import httpx
+
+    from ha_edge import config
+
     if r.status_code == 401:
         _err("Login failed: wrong email or password.")
         return EXIT_USAGE
@@ -238,8 +245,15 @@ def _cmd_login(args: argparse.Namespace) -> int:
     if not isinstance(token, str) or not token:
         _err(f"Login failed: unexpected server response (HTTP {r.status_code}).")
         return EXIT_ERROR
-    config.save_agent(config.AgentConfig(base, args.email, token))
-    print(f"Logged in as {args.email}. Now run `ha-agent run`.")
+    # member_id lets the agent recognise its own acks; without it, it compares emails.
+    member_id = None
+    with contextlib.suppress(httpx.HTTPError, ValueError, AttributeError):
+        me = http.get(f"{base}/auth/me", headers={"Authorization": f"Bearer {token}"})
+        if me.status_code == 200:
+            mid = me.json().get("id")
+            member_id = mid if isinstance(mid, int) and not isinstance(mid, bool) else None
+    config.save_agent(config.AgentConfig(base, email, token, member_id))
+    print(f"Logged in as {email}. Now run `ha-agent run`.")
     return EXIT_OK
 
 
