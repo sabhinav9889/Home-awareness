@@ -276,9 +276,13 @@ def _finish_login(http: Any, base: str, email: str, r: Any) -> int:
         _err("Login failed: Too many attempts. Wait a minute and try again.")
         return EXIT_USAGE
     agent_token = None
+    agent_token_id = None
     if t.status_code == 201:
         with contextlib.suppress(ValueError, AttributeError):
-            agent_token = t.json().get("token")
+            body = t.json()
+            agent_token = body.get("token")
+            tid = body.get("id")
+            agent_token_id = tid if isinstance(tid, int) and not isinstance(tid, bool) else None
     if not isinstance(agent_token, str) or not agent_token:
         _err(f"Login failed: unexpected server response (HTTP {t.status_code}).")
         return EXIT_ERROR
@@ -289,9 +293,27 @@ def _finish_login(http: Any, base: str, email: str, r: Any) -> int:
         if me.status_code == 200:
             mid = me.json().get("id")
             member_id = mid if isinstance(mid, int) and not isinstance(mid, bool) else None
-    config.save_agent(config.AgentConfig(base, email, member_id=member_id, agent_token=agent_token))
+    _revoke_previous_token(http, base, auth)
+    config.save_agent(
+        config.AgentConfig(
+            base, email, member_id=member_id, agent_token=agent_token, agent_token_id=agent_token_id
+        )
+    )
     print(f"Logged in as {email}. Now run `ha-agent run`.")
     return EXIT_OK
+
+
+def _revoke_previous_token(http: Any, base: str, auth: dict[str, str]) -> None:
+    """Best effort: a re-login replaces the stored agent token, so revoke the old one on the
+    server instead of leaving it live. Any failure is ignored; nothing is printed."""
+    import httpx
+
+    from ha_edge import config
+
+    with contextlib.suppress(config.ConfigError, httpx.HTTPError):
+        old = config.load_agent()
+        if old is not None and old.agent_token_id is not None and old.base_url == base:
+            http.delete(f"{base}/me/agent-tokens/{old.agent_token_id}", headers=auth)
 
 
 def _cmd_agent_run(args: argparse.Namespace) -> int:

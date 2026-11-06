@@ -31,6 +31,7 @@ class AgentConfig:
     access_token: str | None = None
     member_id: int | None = None  # from GET /auth/me; absent in configs saved before it
     agent_token: str | None = None  # long-lived, revocable `ha_agent_…` token
+    agent_token_id: int | None = None  # the server's id for it: lets a re-login revoke it
 
     @property
     def bearer_token(self) -> str | None:
@@ -91,7 +92,7 @@ def load_sensor() -> SensorConfig | None:
 
 def save_agent(cfg: AgentConfig) -> Path:
     # Store only the token the agent has: no `"access_token": null` beside an agent token.
-    return _save("agent.json", cfg, omit_none=("access_token", "agent_token"))
+    return _save("agent.json", cfg, omit_none=("access_token", "agent_token", "agent_token_id"))
 
 
 def load_agent() -> AgentConfig | None:

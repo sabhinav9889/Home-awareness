@@ -265,6 +265,7 @@ def test_agent_login_stores_agent_token_not_password_or_jwt(cfgdir, monkeypatch,
         "email": "me@example.com",
         "member_id": 41,
         "agent_token": AGENT_TOKEN,
+        "agent_token_id": 9,
     }
     assert me.calls[0].request.headers["authorization"] == f"Bearer {JWT}"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -506,3 +507,72 @@ def test_agent_run_warns_when_the_stored_login_is_about_to_expire(cfgdir, monkey
     assert cli.agent_main(["run"]) == 0
     assert "less than 2 h" in caplog.text
     assert token not in caplog.text
+
+
+def _relogin_mocks():
+    respx.post("http://srv/auth/login").mock(
+        return_value=httpx.Response(200, json={"access_token": JWT, "token_type": "bearer"})
+    )
+    _mock_agent_token(json_body={"id": 12, "token": AGENT_TOKEN})
+    respx.get("http://srv/auth/me").mock(return_value=httpx.Response(200, json={"id": 41}))
+
+
+@respx.mock
+def test_agent_relogin_revokes_the_previous_token(cfgdir, monkeypatch, capsys):
+    from ha_edge import config
+
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": PASSWORD)
+    config.save_agent(
+        config.AgentConfig("http://srv", "a@b.c", agent_token="ha_agent_old", agent_token_id=5)
+    )
+    _relogin_mocks()
+    gone = respx.delete("http://srv/me/agent-tokens/5").mock(return_value=httpx.Response(204))
+    assert cli.agent_main(["login", "--server", "http://srv", "--email", "a@b.c"]) == 0
+    assert gone.calls[0].request.headers["authorization"] == f"Bearer {JWT}"
+    saved = json.loads((cfgdir / "agent.json").read_text())
+    assert saved["agent_token"] == AGENT_TOKEN and saved["agent_token_id"] == 12
+    out = capsys.readouterr()
+    for secret in (JWT, PASSWORD, AGENT_TOKEN, "ha_agent_old"):
+        assert secret not in out.out + out.err
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "outcome", [httpx.Response(404), httpx.Response(500), httpx.ConnectError("refused")]
+)
+def test_agent_relogin_survives_a_failing_revoke(cfgdir, monkeypatch, capsys, outcome):
+    from ha_edge import config
+
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": PASSWORD)
+    config.save_agent(
+        config.AgentConfig("http://srv", "a@b.c", agent_token="ha_agent_old", agent_token_id=5)
+    )
+    _relogin_mocks()
+    route = respx.delete("http://srv/me/agent-tokens/5")
+    if isinstance(outcome, Exception):
+        route.mock(side_effect=outcome)
+    else:
+        route.mock(return_value=outcome)
+    assert cli.agent_main(["login", "--server", "http://srv", "--email", "a@b.c"]) == 0
+    assert route.called
+    assert json.loads((cfgdir / "agent.json").read_text())["agent_token"] == AGENT_TOKEN
+    assert "Logged in" in capsys.readouterr().out
+
+
+@respx.mock
+def test_agent_login_without_an_old_id_revokes_nothing(cfgdir, monkeypatch):
+    from ha_edge import config
+
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": PASSWORD)
+    config.save_agent(config.AgentConfig("http://srv", "a@b.c", access_token="legacy.jwt"))
+    _relogin_mocks()  # any DELETE would raise: respx has no route for it
+    assert cli.agent_main(["login", "--server", "http://srv", "--email", "a@b.c"]) == 0
+
+
+def test_config_without_agent_token_id_still_loads(cfgdir):
+    (cfgdir / "agent.json").write_text(
+        json.dumps({"base_url": "http://srv", "email": "a@b.c", "agent_token": "ha_agent_x"})
+    )
+    from ha_edge import config
+
+    assert config.load_agent().agent_token_id is None
