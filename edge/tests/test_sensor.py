@@ -292,3 +292,13 @@ async def test_stop_event_ends_cleanly_and_closes_mic():
     await until(lambda: mic.entered)
     assert await finish(task, stop) == EXIT_OK
     assert mic.closed
+
+
+async def test_mic_failing_to_open_exits_4():
+    class BrokenMic(FakeMic):
+        async def __aenter__(self):
+            raise MicLost("cannot start pw-record")
+
+    task, _stop = start(FakeClient(), mic=BrokenMic())
+    async with asyncio.timeout(2):
+        assert await task == EXIT_MIC_LOST
