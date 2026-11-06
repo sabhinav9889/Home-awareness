@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI
@@ -7,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.alerts.router import router as alerts_router
 from app.auth.router import router as auth_router
-from app.db import get_session
+from app.config import get_settings
+from app.db import _sessionmaker, get_session
+from app.devices.offline import offline_loop
 from app.devices.router import router as devices_router
 from app.events.router import router as events_router
 from app.households.router import router as households_router
@@ -19,9 +23,23 @@ from app.rules.router import router as rules_router
 DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
 
 
-def create_app() -> FastAPI:
+def create_app(*, run_background_jobs: bool = False) -> FastAPI:
+    """Background jobs are opt-in so tests never start a real loop; the entrypoint enables them."""
     configure_logging()
-    app = FastAPI(title="Home Awareness", description=DISCLAIMER)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        task = None
+        if run_background_jobs and get_settings().job_runner == "inprocess":
+            task = asyncio.create_task(offline_loop(_sessionmaker(), await get_redis()))
+        try:
+            yield
+        finally:
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    app = FastAPI(title="Home Awareness", description=DISCLAIMER, lifespan=lifespan)
 
     @app.get("/health", description=DISCLAIMER)
     async def health(
@@ -42,4 +60,4 @@ def create_app() -> FastAPI:
     return app
 
 
-app = create_app()
+app = create_app(run_background_jobs=True)
