@@ -130,6 +130,20 @@ async def put_alert_preferences(
     return _out(pref)
 
 
+@router.delete(
+    "/me/telegram",
+    status_code=204,
+    description=f"Unlink your Telegram chat and turn Telegram alerts off. {DISCLAIMER}",
+)
+async def unlink_telegram(
+    tenant: Annotated[Tenant, Depends(get_tenant)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> None:
+    pref = await _prefs(tenant, session)
+    pref.telegram_chat_id, pref.telegram = None, False
+    await session.commit()
+
+
 @router.post(
     "/me/alert-preferences/ntfy-topic",
     response_model=NtfyTopicOut,

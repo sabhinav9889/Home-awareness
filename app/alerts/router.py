@@ -1,23 +1,30 @@
+import hmac
+import logging
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.alerts import telegram
 from app.alerts.jobs import JobRunner, get_job_runner
 from app.alerts.models import Alert, Delivery
 from app.auth.models import Member
 from app.catalog import SOUNDS
+from app.config import get_settings
 from app.db import get_session
 from app.devices.models import Device
 from app.events.models import Event
 from app.live.hub import publish_to_household
 from app.ratelimit import by_member, rate_limit
 from app.redis import get_redis
+from app.rules.models import AlertPreference
+from app.security import hash_token, new_token
 from app.tenancy import Tenant, get_tenant
 
 DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
@@ -177,3 +184,101 @@ async def acknowledge_alert(
     return AckOut(
         alert_id=alert.id, event_id=alert.event_id, acknowledged_by=me.id, acknowledged_at=now
     )
+
+
+LINK_TTL_S = 600
+LINKED_TEXT = "✅ Linked. You'll get Home Awareness alerts here."
+EXPIRED_TEXT = "Link expired. Create a new one in the dashboard."
+log = logging.getLogger(__name__)
+
+
+class TelegramLinkOut(BaseModel):
+    deep_link: str
+
+
+@router.post(
+    "/me/telegram/link",
+    response_model=TelegramLinkOut,
+    dependencies=[Depends(rate_limit("telegram-link", 5, 60, by_member))],
+    description=f"Create a 10-minute, single-use Telegram deep link. {DISCLAIMER}",
+)
+async def create_telegram_link(
+    tenant: Annotated[Tenant, Depends(get_tenant)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> TelegramLinkOut:
+    settings = get_settings()
+    if not settings.telegram_bot_username or not settings.telegram_bot_token:
+        raise HTTPException(status_code=400, detail="Telegram is not configured")
+    code = new_token("")[:24]
+    await redis.set(f"tglink:{hash_token(code)}", tenant.member.id, ex=LINK_TTL_S)
+    return TelegramLinkOut(deep_link=f"https://t.me/{settings.telegram_bot_username}?start={code}")
+
+
+def _start_code(update_body: object) -> tuple[str, str] | None:
+    """(chat_id, code) from a `/start <code>` text message; None for any other update shape."""
+    if not isinstance(update_body, dict):
+        return None
+    msg = update_body.get("message")
+    if not isinstance(msg, dict):
+        return None
+    chat, text = msg.get("chat"), msg.get("text")
+    if not isinstance(chat, dict) or not isinstance(text, str):
+        return None
+    chat_id = chat.get("id")
+    if not isinstance(chat_id, int) or isinstance(chat_id, bool):
+        return None
+    parts = text.split()
+    if len(parts) != 2 or parts[0] != "/start":
+        return None
+    return str(chat_id), parts[1]
+
+
+@router.post(
+    "/telegram/webhook/{secret}",
+    include_in_schema=False,
+    description=f"Telegram bot webhook. {DISCLAIMER}",
+)
+async def telegram_webhook(
+    secret: str,
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> dict[str, bool]:
+    settings = get_settings()
+    expected = settings.telegram_webhook_secret
+    if not expected or not hmac.compare_digest(secret.encode(), expected.encode()):
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        parsed = _start_code(await request.json())
+    except ValueError:
+        parsed = None
+    if parsed is None or not settings.telegram_bot_token:
+        return {"ok": True}  # Telegram retries non-200s forever: ignore anything unexpected
+    chat_id, code = parsed
+    member_id = await redis.getdel(f"tglink:{hash_token(code)}")  # atomic: one use per code
+    member = await session.get(Member, int(member_id)) if member_id else None
+    if member is None:
+        reply = EXPIRED_TEXT
+    else:
+        tenant = Tenant(member, session)
+        # The chat belongs to whoever proved the newest code, even across households, so this
+        # one write is keyed on chat_id and deliberately not household-scoped.
+        await session.execute(
+            update(AlertPreference)
+            .where(AlertPreference.telegram_chat_id == chat_id)
+            .values(telegram_chat_id=None, telegram=False)
+        )
+        pref = await session.scalar(
+            tenant.select(AlertPreference).where(AlertPreference.member_id == member.id)
+        )
+        if pref is None:
+            pref = tenant.add(AlertPreference(member_id=member.id))
+        pref.telegram_chat_id, pref.telegram = chat_id, True
+        await session.commit()
+        reply = LINKED_TEXT
+    try:
+        async with httpx.AsyncClient(timeout=10) as http:
+            await telegram.send_message(http, settings.telegram_bot_token, chat_id, reply)
+    except Exception as e:  # best effort: a failed reply must never make the webhook non-200
+        log.warning("telegram reply failed: %s", type(e).__name__)
+    return {"ok": True}
