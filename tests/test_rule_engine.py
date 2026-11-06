@@ -139,11 +139,66 @@ async def test_each_member_gets_own_alert_and_rules(signed_up, session, redis):
     assert [a.member_id for a in alerts] == [owner.id]
 
 
-async def test_event_route_enqueues_alerts_after_commit(client, signed_up, session, jobs):
+async def test_event_route_enqueues_alerts_after_commit(
+    client, signed_up, session, jobs, monkeypatch
+):
     owner, h = await signed_up()
     _, dk = await _device(client, h)
+    order: list[str] = []
+    real_commit, real_enqueue = session.commit, jobs.enqueue_alert
+
+    async def commit():
+        order.append("commit")
+        await real_commit()
+
+    async def enqueue(alert_id):
+        order.append(f"enqueue:{alert_id}")
+        await real_enqueue(alert_id)
+
+    monkeypatch.setattr(session, "commit", commit)
+    monkeypatch.setattr(jobs, "enqueue_alert", enqueue)
     r = await client.post("/device/events", json=_body("scream"), headers=dk)
     assert r.status_code == 202 and r.json()["alerts"] == 1
     alerts = (await session.scalars(select(Alert))).all()
     assert len(alerts) == 1 and jobs.enqueued == [alerts[0].id]
     assert alerts[0].member_id == owner.id
+    assert order == ["commit", f"enqueue:{alerts[0].id}"]  # commit strictly before enqueue
+
+
+async def test_zero_cooldown_still_alerts(signed_up, session, redis):
+    owner, (dev,) = await _setup(signed_up, session)
+    await _set(session, owner, "scream", cooldown=0)
+    _, out = await _fire(session, redis, owner, dev, "scream", 1000.0)
+    assert len(out.alert_ids) == 1
+
+
+async def test_dog_barking_catalog_defaults_need_5_barks(signed_up, session, redis):
+    from app.catalog import get_sound
+
+    snd = get_sound("dog_barking")
+    assert snd.default_repeat == 5
+    owner, (dev,) = await _setup(signed_up, session)
+    await _set(
+        session,
+        owner,
+        "dog_barking",
+        repeat=snd.default_repeat,
+        window=snd.default_window_s,
+        cooldown=snd.default_cooldown_s,
+    )
+    for t in range(4):
+        _, out = await _fire(session, redis, owner, dev, "dog_barking", 1000.0 + t)
+        assert out.alert_ids == []
+    _, out = await _fire(session, redis, owner, dev, "dog_barking", 1004.0)
+    assert len(out.alert_ids) == 1
+
+
+async def test_same_device_refreshes_merge_window(signed_up, session, redis):
+    owner, (a, b) = await _setup(signed_up, session, devices=2)
+    await _set(session, owner, "scream", repeat=3)
+    _, o1 = await _fire(session, redis, owner, a, "scream", 1000.0)
+    _, o2 = await _fire(session, redis, owner, a, "scream", 1001.0)
+    assert o1.merged is False and o2.merged is False
+    e3, o3 = await _fire(session, redis, owner, b, "scream", 1002.0)
+    assert o3.merged is True and e3.merged is True and o3.alert_ids == []
+    assert await redis.get(f"merge:{owner.household_id}:scream") == str(a)
