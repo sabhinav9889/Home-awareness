@@ -1,3 +1,20 @@
+x-app-env: &app-env
+  environment:
+    DATABASE_URL: postgresql+asyncpg://home:home@db:5432/home
+    REDIS_URL: redis://redis:6379/0
+    JWT_SECRET: ${JWT_SECRET:-change-me-in-env-file-0123456789abcdef}
+    PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+    JOB_RUNNER: ${JOB_RUNNER:-celery}
+    EMAIL_BACKEND: ${EMAIL_BACKEND:-console}
+    NTFY_BASE_URL: ${NTFY_BASE_URL:-https://ntfy.sh}
+    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+    TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+
+x-app-deps: &app-deps
+  migrate: {condition: service_completed_successfully}
+  redis: {condition: service_healthy}
+
 services:
   db:
     image: postgres:16-alpine
@@ -24,6 +41,34 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+  migrate:
+    build: .
+    <<: *app-env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db: {condition: service_healthy}
+  api:
+    build: .
+    <<: *app-env
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+    depends_on: *app-deps
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+  worker:
+    build: .
+    <<: *app-env
+    command: ["celery", "-A", "app.alerts.celery_app", "worker", "--loglevel=INFO"]
+    depends_on: *app-deps
+  beat:
+    build: .
+    <<: *app-env
+    command: ["celery", "-A", "app.alerts.celery_app", "beat", "--loglevel=INFO", "-s", "/tmp/celerybeat-schedule"]
+    depends_on: *app-deps
 
 volumes:
   pgdata:

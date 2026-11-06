@@ -2,7 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Response
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +16,8 @@ from app.devices.router import router as devices_router
 from app.events.router import router as events_router
 from app.households.router import router as households_router
 from app.live.router import router as live_router
-from app.logging import configure_logging
+from app.logging import RequestLogMiddleware, configure_logging
+from app.metrics import render
 from app.redis import get_redis
 from app.rules.router import router as rules_router
 
@@ -50,6 +51,12 @@ def create_app(*, run_background_jobs: bool = False) -> FastAPI:
         await redis.ping()
         return {"status": "ok", "db": "ok", "redis": "ok"}
 
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics() -> Response:
+        body, content_type = render()
+        return Response(body, media_type=content_type)
+
+    app.add_middleware(RequestLogMiddleware)
     app.include_router(auth_router)
     app.include_router(households_router)
     app.include_router(rules_router)

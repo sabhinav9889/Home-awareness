@@ -16,6 +16,7 @@ from app.auth.models import Member
 from app.config import get_settings
 from app.devices.models import Device
 from app.live.hub import publish_to_household
+from app.metrics import DEVICES_OFFLINE
 from app.rules.models import AlertPreference
 from app.tenancy import Tenant
 
@@ -83,6 +84,8 @@ async def check_offline_devices(
         )
     ).all()
     await session.commit()
+    if rows:
+        DEVICES_OFFLINE.inc(len(rows))
     for device_id, household_id, name in rows:
         try:
             await publish_to_household(

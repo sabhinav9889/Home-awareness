@@ -14,6 +14,7 @@ from app.config import get_settings
 from app.devices.models import Device
 from app.events.models import Event
 from app.live.hub import publish_to_member
+from app.metrics import DELIVERIES
 from app.rules.models import AlertPreference
 from app.tenancy import Tenant
 
@@ -152,6 +153,7 @@ async def deliver_alert(
             else:
                 await _send_with_retries(d, send, sleep, (token,) if token else ())
             await session.commit()  # persist each channel's outcome before the next send
+            DELIVERIES.labels(d.channel, d.status).inc()
 
         ok = sum(d.status == "sent" for d, _ in plan)
         if ok == 0:

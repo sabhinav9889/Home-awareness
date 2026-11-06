@@ -14,6 +14,7 @@ from app.devices.models import Device
 from app.events.models import Event
 from app.events.schemas import EventAccepted, EventIn, EventOut
 from app.live.hub import publish_to_household
+from app.metrics import ALERTS_CREATED, EVENTS_MERGED, EVENTS_RECEIVED
 from app.ratelimit import by_device_key, rate_limit
 from app.redis import get_redis
 from app.rules.engine import RuleOutcome, process_event
@@ -53,6 +54,11 @@ async def post_event(
     outcome: RuleOutcome = await process_event(session, redis, event, time.time())
     event.merged = outcome.merged
     await session.commit()
+    EVENTS_RECEIVED.labels(event.sound_key).inc()
+    if event.merged:
+        EVENTS_MERGED.inc()
+    if outcome.alert_ids:
+        ALERTS_CREATED.labels(event.sound_key).inc(len(outcome.alert_ids))
     for alert_id in outcome.alert_ids:  # after commit: workers must see the rows
         await jobs.enqueue_alert(alert_id)
     await publish_to_household(

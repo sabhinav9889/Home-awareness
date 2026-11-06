@@ -33,3 +33,4 @@ jobs:
       - run: uv python install 3.12
       - run: uv sync --frozen
       - run: uv run ruff check . && uv run pytest -q
+      - run: docker build -t home-awareness .

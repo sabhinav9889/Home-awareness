@@ -24,10 +24,21 @@ TEST_DATABASE_URL = os.environ.get(
 _tables_created = False
 
 
+def require_test_database(url: str) -> None:
+    """drop_all is destructive: refuse unless the database name ends with _test."""
+    name = url.rsplit("/", 1)[-1].split("?")[0]
+    if not name.endswith("_test"):
+        raise RuntimeError(
+            f"Refusing to drop all tables: test database {name!r} must end with '_test' "
+            "(check TEST_DATABASE_URL)."
+        )
+
+
 async def _ensure_tables() -> None:
     global _tables_created
     if _tables_created:
         return
+    require_test_database(TEST_DATABASE_URL)
     engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)  # schema changes (check constraints) must apply

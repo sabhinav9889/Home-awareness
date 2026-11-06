@@ -1,0 +1,11 @@
+.venv/
+.git/
+.env
+.fake_sensor_key
+.superpowers/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+docs/
+tests/
