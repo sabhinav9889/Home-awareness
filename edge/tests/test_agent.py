@@ -256,15 +256,14 @@ async def test_ack_from_other_member_stops_alarm_and_shows_who():
 async def test_own_ack_from_elsewhere_stops_alarm_without_popup():
     gate = asyncio.Event()
     ack = {"kind": "alert_ack", "event_id": 3, "by_member_id": 1, "by_email": "ME@x.org", "at": AT}
-    server = FakeServer(([ALERT, gate, ack], HANG))
+    server = FakeServer(([ALERT, gate, ack, MARK], HANG))
     notifier, alarm = FakeNotifier({TITLE: asyncio.get_running_loop().create_future()}), FakeAlarm()
     stop, task = _start(server, notifier, alarm)
     await _until(lambda: alarm.playing)
     gate.set()
     await _until(lambda: not alarm.playing)
-    for _ in range(10):
-        await asyncio.sleep(0)
-    assert len(notifier.popups) == 1
+    await _until_marked(notifier)  # the ack was fully handled
+    assert len(_real(notifier)) == 1
     stop.set()
     await task
 
@@ -488,6 +487,21 @@ async def _settle():
         await asyncio.sleep(0)
 
 
+# A message sent after the one under test: once its popup shows, everything before it was
+# handled, so negative assertions afterwards can actually fail.
+MARK = {"kind": "device_offline", "device_id": 99, "name": "marker"}
+MARK_TITLE = "Sensor offline: marker"
+
+
+async def _until_marked(notifier):
+    await _until(lambda: any(p[0] == MARK_TITLE for p in notifier.popups))
+    await _settle()
+
+
+def _real(notifier):
+    return [p for p in notifier.popups if p[0] != MARK_TITLE]
+
+
 async def test_alarm_failure_still_shows_popup_and_keeps_the_connection(caplog):
     gate = asyncio.Event()
     offline = {"kind": "device_offline", "device_id": 1, "name": "Hall"}
@@ -519,14 +533,14 @@ async def test_second_alert_handled_while_first_popup_pending():
 
 async def test_ack_for_an_alert_i_never_got_is_ignored():
     gate = asyncio.Event()
-    server = FakeServer(([ALERT, gate, _ack(99)], HANG))
+    server = FakeServer(([ALERT, gate, _ack(99), MARK], HANG))
     notifier, alarm = FakeNotifier({TITLE: _pending()}), FakeAlarm()
     stop, task = _start(server, notifier, alarm)
     await _until(lambda: alarm.playing)
     gate.set()
-    await _settle()
+    await _until_marked(notifier)
     assert alarm.playing and alarm.stops == 0
-    assert len(notifier.popups) == 1
+    assert len(_real(notifier)) == 1
     stop.set()
     await task
 
@@ -534,15 +548,15 @@ async def test_ack_for_an_alert_i_never_got_is_ignored():
 async def test_test_alert_ack_across_household_is_ignored():
     gate = asyncio.Event()
     mine = _alert(7, None, sound_key="test", label="Test alert")
-    server = FakeServer(([mine, gate, _ack(None)], HANG))
+    server = FakeServer(([mine, gate, _ack(None), MARK], HANG))
     notifier = FakeNotifier({"Test alert — your alerts work": _pending()})
     alarm = FakeAlarm()
     stop, task = _start(server, notifier, alarm)
     await _until(lambda: alarm.playing)
     gate.set()
-    await _settle()
+    await _until_marked(notifier)
     assert alarm.playing and alarm.stops == 0
-    assert len(notifier.popups) == 1
+    assert len(_real(notifier)) == 1
     stop.set()
     await task
 
@@ -597,15 +611,16 @@ async def test_stop_alarm_button_forgets_that_alert():
 async def test_own_ack_falls_back_to_case_insensitive_email_without_member_id():
     gate = asyncio.Event()
     cfg = AgentConfig("http://srv", "Me@Example.com", TOKEN)  # old config: no member_id
-    server = FakeServer(([ALERT, gate, _ack(3, by_member_id=1, by_email="me@example.COM")], HANG))
+    own = _ack(3, by_member_id=1, by_email="me@example.COM")
+    server = FakeServer(([ALERT, gate, own, MARK], HANG))
     notifier, alarm = FakeNotifier({TITLE: _pending()}), FakeAlarm()
     stop = asyncio.Event()
     task = asyncio.create_task(_run(server, notifier, alarm, stop=stop, cfg=cfg))
     await _until(lambda: alarm.playing)
     gate.set()
     await _until(lambda: not alarm.playing)
-    await _settle()
-    assert len(notifier.popups) == 1
+    await _until_marked(notifier)
+    assert len(_real(notifier)) == 1
     stop.set()
     await task
 

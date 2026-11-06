@@ -187,7 +187,9 @@ async def test_debounce_uses_monotonic_clock():
     clf = FakeClassifier()
     task, stop = start(client, classifier=clf)
     await until(lambda: clf.calls >= 41 and len(client.sent) >= 1)
+    before = clf.calls
     await asyncio.sleep(0.05)
+    assert clf.calls > before  # windows kept flowing during the pause
     await finish(task, stop)
     assert len(client.sent) <= clf.calls // 4 + 1
 
@@ -197,7 +199,9 @@ async def test_disabled_sound_dropped():
     clf = FakeClassifier(hot=(COUGH,))
     task, stop = start(client, classifier=clf)
     await until(lambda: clf.calls >= 20 and client.heartbeats >= 1)
+    before = clf.calls
     await asyncio.sleep(0.05)
+    assert clf.calls > before  # still classifying while we watched for sends
     assert await finish(task, stop) == EXIT_OK
     assert client.sent == []
 
@@ -334,9 +338,12 @@ async def test_queued_event_for_sound_disabled_by_heartbeat_is_never_sent():
             self.sent.append((sound, confidence, occurred_at))
 
     client = OutageClient()
-    task, stop = start(client, classifier=FakeClassifier(hot=(SIREN, DOORBELL)))
+    clf = FakeClassifier(hot=(SIREN, DOORBELL))
+    task, stop = start(client, classifier=clf)
     await until(lambda: client.sent)
+    sent, calls = len(client.sent), clf.calls
     await asyncio.sleep(0.05)
+    assert clf.calls > calls and len(client.sent) > sent  # detecting and draining went on
     assert await finish(task, stop) == EXIT_OK
     assert {s for s, _, _ in client.sent} == {"doorbell"}
 
@@ -389,6 +396,8 @@ async def test_playback_probe_consulted_for_borderline_scores():
     probe = CountingProbe(playing=True)
     task, stop = start(client, classifier=clf, probe=probe)
     await until(lambda: clf.calls >= 10 and client.heartbeats >= 1 and probe.calls >= 1)
+    before = clf.calls
     await asyncio.sleep(0.02)
+    assert clf.calls > before and probe.calls > 1
     assert await finish(task, stop) == EXIT_OK
     assert client.sent == []  # boosted threshold suppressed it
