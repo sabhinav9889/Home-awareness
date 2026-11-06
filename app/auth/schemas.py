@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.households.timezone import validate_timezone
+
 
 def _norm_email(v: str) -> str:
     v = v.strip().lower()
@@ -13,8 +15,10 @@ class SignupIn(BaseModel):
     password: str = Field(min_length=10, max_length=256)
     household_name: str | None = Field(default=None, min_length=1, max_length=200)
     invite_token: str | None = Field(default=None, max_length=200)
+    timezone: str = "UTC"
 
     _email = field_validator("email")(_norm_email)
+    _tz = field_validator("timezone")(validate_timezone)
 
     @model_validator(mode="after")
     def _exactly_one(self) -> "SignupIn":

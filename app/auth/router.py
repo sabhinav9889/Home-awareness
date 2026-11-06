@@ -78,7 +78,7 @@ async def signup(
             raise HTTPException(status_code=400, detail="invalid or expired invite")
         role = "member"
     else:
-        household = Household(name=body.household_name)
+        household = Household(name=body.household_name, timezone=body.timezone)
         session.add(household)
         await session.flush()
         household_id = household.id

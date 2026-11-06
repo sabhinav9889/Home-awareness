@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.db import get_session
 from app.disclaimer import DISCLAIMER
 from app.households.models import Household, Invite
-from app.households.schemas import HouseholdOut, InviteOut, MemberOut
+from app.households.schemas import HouseholdOut, HouseholdPatch, InviteOut, MemberOut
 from app.live.hub import publish_disconnect
 from app.redis import get_redis
 from app.security import hash_token, new_token
@@ -37,8 +37,26 @@ async def get_household(
     return HouseholdOut(
         id=household.id,
         name=household.name,
+        timezone=household.timezone,
         members=[MemberOut(id=m.id, email=m.email, role=m.role) for m in members],
     )
+
+
+@router.patch(
+    "/me",
+    response_model=HouseholdOut,
+    description=f"Owner sets the household timezone used in alert times. {DISCLAIMER}",
+)
+async def patch_household(
+    body: HouseholdPatch,
+    tenant: Annotated[Tenant, Depends(get_tenant)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> HouseholdOut:
+    _require_owner(tenant)
+    household = await session.get(Household, tenant.household_id)
+    household.timezone = body.timezone
+    await session.commit()
+    return await get_household(tenant, session)
 
 
 @router.post(

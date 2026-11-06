@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 from redis.asyncio import Redis
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from app.alerts import ntfy, telegram
 from app.alerts.models import Alert, Delivery
@@ -15,6 +15,8 @@ from app.catalog import get_sound
 from app.config import get_settings
 from app.devices.models import Device
 from app.events.models import Event
+from app.households.models import Household
+from app.households.timezone import tz_label
 from app.live.hub import publish_to_member
 from app.metrics import DELIVERIES
 from app.rules.models import AlertPreference
@@ -164,11 +166,15 @@ async def _deliver_claimed(
             device = await session.scalar(tenant.select(Device).where(Device.id == event.device_id))
             device_name = device.name if device else device_name
     at = alert.created_at.astimezone(UTC)
+    household_tz = await session.scalar(
+        select(Household.timezone).where(Household.id == alert.household_id)
+    )
     if alert.event_id is None:
         label, text = "Test alert", TEST_TEXT
     else:
         label = get_sound(alert.sound_key).label
-        text = f"⚠️ {label} detected by {device_name} at {at:%H:%M} UTC — Home Awareness"
+        hhmm, tz = tz_label(at, household_tz)
+        text = f"⚠️ {label} detected by {device_name} at {hhmm} {tz} — Home Awareness"
 
     Send = Callable[[], Awaitable[object]]
     plan: list[tuple[Delivery, Send | None]] = []  # None: nothing to send (pre-failed)
