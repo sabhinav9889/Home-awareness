@@ -30,6 +30,7 @@ async def _ensure_tables() -> None:
         return
     engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)  # schema changes (check constraints) must apply
         await conn.run_sync(Base.metadata.create_all)
     await engine.dispose()
     _tables_created = True

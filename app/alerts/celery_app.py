@@ -30,6 +30,9 @@ async def _run(alert_id: int) -> None:
         await engine.dispose()
 
 
+# Delivery is at-most-once by design: acks_late stays OFF (Celery acks on receipt), so a
+# worker crash loses the alert rather than re-sending alarms; deliver_alert also claims the
+# alert atomically, so a duplicate message is a no-op.
 @celery.task(name="deliver_alert")
 def deliver_alert_task(alert_id: int) -> None:
     asyncio.run(_run(alert_id))

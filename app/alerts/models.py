@@ -10,7 +10,9 @@ from app.events.models import Event  # noqa: F401  (registers events table)
 
 class Alert(Base):
     __tablename__ = "alerts"
-    __table_args__ = (CheckConstraint("status IN ('pending','sent','partial','failed')"),)
+    __table_args__ = (
+        CheckConstraint("status IN ('pending','delivering','sent','partial','failed')"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     household_id: Mapped[int] = mapped_column(

@@ -1,10 +1,13 @@
 """Job runner seam: enqueue alert delivery on Celery or in-process."""
 
 import asyncio
+import logging
 from typing import Protocol
 
 from app.alerts.delivery import deliver_alert
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class JobRunner(Protocol):
@@ -25,7 +28,12 @@ class InProcessJobRunner:
     async def enqueue_alert(self, alert_id: int) -> None:
         task = asyncio.create_task(deliver_alert(alert_id))
         self._tasks.add(task)  # keep a ref so the task isn't garbage collected mid-flight
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(lambda t: self._done(alert_id, t))
+
+    def _done(self, alert_id: int, task: asyncio.Task) -> None:
+        self._tasks.discard(task)
+        if not task.cancelled() and (exc := task.exception()) is not None:
+            logger.error("alert delivery failed for alert %s", alert_id, exc_info=exc)
 
 
 _inprocess = InProcessJobRunner()

@@ -252,13 +252,69 @@ def test_job_runner_selected_by_setting(settings):
     assert isinstance(jobs.get_job_runner(), jobs.CeleryJobRunner)
 
 
-async def test_celery_runner_calls_delay(monkeypatch):
-    calls = []
+async def test_celery_runner_calls_delay(monkeypatch, settings):
     import app.alerts.celery_app as celery_app
 
+    calls = []
+    settings.job_runner = "celery"
     monkeypatch.setattr(celery_app.deliver_alert_task, "delay", lambda i: calls.append(i))
-    await jobs.CeleryJobRunner().enqueue_alert(3)
+    await jobs.get_job_runner().enqueue_alert(3)
     assert calls == [3]
+
+
+async def test_inprocess_runner_logs_task_exceptions(monkeypatch, caplog):
+    async def boom(alert_id, **kw):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(jobs, "deliver_alert", boom)
+    runner = jobs.InProcessJobRunner()
+    with caplog.at_level("ERROR", logger="app.alerts.jobs"):
+        await runner.enqueue_alert(9)
+        await asyncio.gather(*runner._tasks, return_exceptions=True)
+        await asyncio.sleep(0)
+    assert any("alert 9" in r.getMessage() and r.exc_info for r in caplog.records)
+    assert not runner._tasks
+
+
+@respx.mock
+async def test_second_delivery_of_same_alert_sends_nothing(
+    signed_up, session, factory, redis, published
+):
+    # The shared savepoint session can't run two truly concurrent transactions, so the race
+    # is simulated: the second call runs after the first has claimed the alert (the claim is
+    # one atomic UPDATE ... WHERE status='pending', which is what serialises real races).
+    member, _ = await signed_up()
+    await _prefs(session, member, telegram=True, telegram_chat_id="42", ntfy_topic="t")
+    alert = await _alert(session, member)
+    tg = respx.post(TG_URL).mock(return_value=httpx.Response(200, json={"ok": True}))
+    nt = respx.post("https://ntfy.test/t").mock(return_value=httpx.Response(200))
+    await _run(alert, factory, redis)
+    await _run(alert, factory, redis)
+    assert tg.call_count == 1 and nt.call_count == 1 and len(published) == 1
+    assert len(await _deliveries(session, alert.id)) == 3
+
+
+@respx.mock
+async def test_crash_after_first_channel_keeps_sent_row_and_never_resends(
+    signed_up, session, factory, redis, published
+):
+    member, _ = await signed_up()
+    await _prefs(session, member, telegram=True, telegram_chat_id="42")
+    alert = await _alert(session, member)
+    respx.post(TG_URL).mock(return_value=httpx.Response(500))
+
+    async def crashing_sleep(_s):
+        raise RuntimeError("worker died")
+
+    with pytest.raises(RuntimeError):
+        await _run(alert, factory, redis, crashing_sleep)
+    d = await _deliveries(session, alert.id)
+    assert d["websocket"].status == "sent"
+    assert d["telegram"].status == "pending"
+    await session.refresh(alert)
+    assert alert.status == "delivering"
+    await _run(alert, factory, redis)  # redelivery: claim fails, nothing re-sent
+    assert len(published) == 1
 
 
 async def test_alerts_list_only_own(client, signed_up, session):
@@ -302,7 +358,7 @@ async def test_test_alert_uses_all_enabled_channels_and_exact_text(
     r = await client.post("/me/test-alert", headers=h)
     assert r.status_code == 202
     alert_id = r.json()["alert_id"]
-    assert jobs.enqueued == [alert_id]
+    assert jobs.enqueued == [alert_id]  # exactly one enqueue, of the new alert
     alert = await session.get(Alert, alert_id)
     assert alert.event_id is None and alert.sound_key == "test" and alert.member_id == member.id
     tg = respx.post(TG_URL).mock(return_value=httpx.Response(200, json={"ok": True}))
