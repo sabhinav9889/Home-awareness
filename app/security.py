@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import secrets
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from argon2.exceptions import InvalidHashError, VerificationError
 from app.config import get_settings
 
 _hasher = PasswordHasher()
+# Verified against when a login email is unknown, to even out timing.
+DUMMY_HASH = _hasher.hash("dummy-password-for-timing")
 _ALGORITHM = "HS256"
 
 
@@ -23,11 +26,17 @@ class TokenClaims:
     household_id: int
 
 
-def hash_password(p: str) -> str:
-    return _hasher.hash(p)
+# argon2 is deliberately slow (tens of ms of CPU): run it in a worker thread so one login
+# never stalls the event loop that also carries live alerts.
+async def hash_password(p: str) -> str:
+    return await asyncio.to_thread(_hasher.hash, p)
 
 
-def verify_password(p: str, h: str) -> bool:
+async def verify_password(p: str, h: str) -> bool:
+    return await asyncio.to_thread(_verify, p, h)
+
+
+def _verify(p: str, h: str) -> bool:
     try:
         return _hasher.verify(h, p)
     except (VerificationError, InvalidHashError):

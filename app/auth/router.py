@@ -27,6 +27,7 @@ from app.households.models import Household, Invite
 from app.ratelimit import by_ip, rate_limit
 from app.rules.models import AlertPreference
 from app.security import (
+    DUMMY_HASH,
     create_access_token,
     hash_password,
     hash_token,
@@ -44,8 +45,6 @@ _login_limit = rate_limit("login", 10, 60, by_ip)
 _reset_limit = rate_limit("password-reset", 10, 60, by_ip)
 _resend_limit = rate_limit("confirm-resend", 10, 60, by_ip)
 log = logging.getLogger(__name__)
-# Hash verified against when the email is unknown, to even out login timing.
-_DUMMY_HASH = hash_password("dummy-password-for-timing")
 
 
 @router.post(
@@ -87,7 +86,7 @@ async def signup(
     member = Member(
         household_id=household_id,
         email=body.email,
-        password_hash=hash_password(body.password),
+        password_hash=await hash_password(body.password),
         role=role,
     )
     session.add(member)
@@ -193,7 +192,7 @@ async def confirm(body: ConfirmIn, session: Annotated[AsyncSession, Depends(get_
 )
 async def login(body: LoginIn, session: Annotated[AsyncSession, Depends(get_session)]) -> TokenOut:
     member = await session.scalar(select(Member).where(Member.email == body.email))
-    ok = verify_password(body.password, member.password_hash if member else _DUMMY_HASH)
+    ok = await verify_password(body.password, member.password_hash if member else DUMMY_HASH)
     if member is None or not ok:
         raise HTTPException(status_code=401, detail="invalid credentials")
     if not member.email_confirmed:
@@ -266,7 +265,7 @@ async def password_reset_confirm(
     if member_id is None:
         raise HTTPException(status_code=400, detail="invalid or expired token")
     member = await session.get(Member, member_id)
-    member.password_hash = hash_password(body.new_password)
+    member.password_hash = await hash_password(body.new_password)
     # Retire any other outstanding reset links for this member.
     await session.execute(
         update(EmailToken)

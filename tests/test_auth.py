@@ -135,3 +135,31 @@ async def test_signup_survives_failing_email_and_resend_recovers(client, outbox,
     app_main.app.dependency_overrides[get_email_sender] = lambda: outbox
     assert (await client.post("/auth/confirm/resend", json={"email": "a@x.com"})).status_code == 202
     assert (await client.post("/auth/confirm", json={"token": _token(outbox)})).status_code == 204
+
+
+async def test_login_password_length_capped(client):
+    r = await client.post("/auth/login", json={"email": "a@x.com", "password": "p" * 257})
+    assert r.status_code == 422
+
+
+async def test_argon2_runs_off_the_event_loop(client, outbox, monkeypatch):
+    import threading
+
+    import app.security as security
+
+    threads = []
+    real = security._hasher
+
+    class Spy:
+        def hash(self, p):
+            threads.append(threading.get_ident())
+            return real.hash(p)
+
+        def verify(self, h, p):
+            threads.append(threading.get_ident())
+            return real.verify(h, p)
+
+    monkeypatch.setattr(security, "_hasher", Spy())
+    await _signup(client)
+    await client.post("/auth/login", json={"email": "a@x.com", "password": PW})
+    assert len(threads) == 2 and threading.get_ident() not in threads

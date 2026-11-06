@@ -34,7 +34,7 @@ class ConfirmIn(BaseModel):
 
 class LoginIn(BaseModel):
     email: str
-    password: str
+    password: str = Field(max_length=256)  # caps argon2 work per request
 
     @field_validator("email")
     @classmethod
