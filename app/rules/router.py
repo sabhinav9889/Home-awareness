@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog import SOUNDS
 from app.db import get_session
+from app.disclaimer import DISCLAIMER
 from app.rules.effective import effective_settings
 from app.rules.models import AlertPreference, SoundSetting
 from app.rules.schemas import (
@@ -18,8 +19,6 @@ from app.rules.schemas import (
     SoundSettingOut,
 )
 from app.tenancy import Tenant, get_tenant
-
-DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
 
 router = APIRouter(tags=["rules"])
 

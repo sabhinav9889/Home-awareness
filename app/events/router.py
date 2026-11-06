@@ -11,6 +11,7 @@ from app.catalog import get_sound
 from app.db import get_session
 from app.devices.deps import current_device, get_device_tenant
 from app.devices.models import Device
+from app.disclaimer import DISCLAIMER
 from app.events.models import Event
 from app.events.schemas import EventAccepted, EventIn, EventOut
 from app.live.hub import publish_to_household
@@ -19,8 +20,6 @@ from app.ratelimit import by_device_key, enforce, rate_limit
 from app.redis import get_redis
 from app.rules.engine import RuleOutcome, process_event
 from app.tenancy import Tenant, get_tenant
-
-DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
 
 router = APIRouter(tags=["events"])
 

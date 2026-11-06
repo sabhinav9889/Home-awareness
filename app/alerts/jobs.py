@@ -59,13 +59,3 @@ async def enqueue_or_fallback(jobs: JobRunner, alert_id: int) -> None:
     except Exception:
         logger.error("enqueue failed for alert %s; delivering in-process", alert_id, exc_info=True)
         await _inprocess.enqueue_alert(alert_id)
-
-
-class RecordingJobRunner:
-    """Test double: records the alert ids it was asked to enqueue."""
-
-    def __init__(self) -> None:
-        self.enqueued: list[int] = []
-
-    async def enqueue_alert(self, alert_id: int) -> None:
-        self.enqueued.append(alert_id)

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.models import Member
 from app.config import get_settings
 from app.db import get_session
+from app.disclaimer import DISCLAIMER
 from app.households.models import Household, Invite
 from app.households.schemas import HouseholdOut, InviteOut, MemberOut
 from app.live.hub import publish_disconnect
@@ -16,7 +17,6 @@ from app.redis import get_redis
 from app.security import hash_token, new_token
 from app.tenancy import Tenant, get_tenant
 
-DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
 INVITE_TTL = timedelta(days=7)
 
 router = APIRouter(prefix="/households", tags=["households"])

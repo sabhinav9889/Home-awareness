@@ -6,7 +6,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base
 from app.households.models import Household  # noqa: F401  (registers households table)
 
-KINDS = ("laptop", "phone", "pi", "other")
 PAIRING_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 PAIRING_CODE_LENGTH = 8
 PAIRING_CODE_TTL_MINUTES = 10

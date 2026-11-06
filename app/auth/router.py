@@ -22,6 +22,7 @@ from app.auth.schemas import (
 )
 from app.config import get_settings
 from app.db import get_session
+from app.disclaimer import DISCLAIMER
 from app.email import EmailSender, get_email_sender
 from app.households.models import Household, Invite
 from app.ratelimit import by_ip, rate_limit
@@ -35,7 +36,6 @@ from app.security import (
     verify_password,
 )
 
-DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
 CONFIRM_TTL = timedelta(hours=24)
 RESET_TTL = timedelta(hours=1)
 

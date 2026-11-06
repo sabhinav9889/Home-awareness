@@ -19,6 +19,7 @@ from app.catalog import SOUNDS
 from app.config import get_settings
 from app.db import get_session
 from app.devices.models import Device
+from app.disclaimer import DISCLAIMER
 from app.events.models import Event
 from app.live.hub import publish_to_household
 from app.ratelimit import by_member, rate_limit
@@ -26,8 +27,6 @@ from app.redis import get_redis
 from app.rules.models import AlertPreference
 from app.security import hash_token, new_token
 from app.tenancy import Tenant, get_tenant
-
-DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
 
 router = APIRouter(tags=["alerts"])
 

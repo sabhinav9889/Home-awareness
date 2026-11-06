@@ -26,14 +26,13 @@ from app.devices.schemas import (
     PairOut,
     WhoamiOut,
 )
+from app.disclaimer import DISCLAIMER
 from app.live.hub import publish_to_household
 from app.ratelimit import by_device_key, by_ip, rate_limit
 from app.redis import get_redis
 from app.rules.effective import household_enabled_sounds
 from app.security import hash_token, new_token
 from app.tenancy import Tenant, get_tenant
-
-DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
 
 HEARTBEAT_INTERVAL_S = 60
 

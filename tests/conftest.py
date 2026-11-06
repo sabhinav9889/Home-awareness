@@ -8,10 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 import app.main as app_main  # imports every router/model before create_all
-from app.alerts.jobs import RecordingJobRunner, get_job_runner
+from app.alerts.jobs import get_job_runner
 from app.db import Base, get_session
 from app.email import get_email_sender
 from app.redis import get_redis
+from tests.doubles import RecordingJobRunner
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://home:home@localhost:5432/home_test")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")

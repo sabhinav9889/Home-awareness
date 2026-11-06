@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.db import _sessionmaker, get_session
 from app.devices.offline import offline_loop
 from app.devices.router import router as devices_router
+from app.disclaimer import DISCLAIMER
 from app.events.router import router as events_router
 from app.households.router import router as households_router
 from app.live.router import router as live_router
@@ -20,8 +21,6 @@ from app.logging import RequestLogMiddleware, configure_logging
 from app.metrics import render
 from app.redis import get_redis
 from app.rules.router import router as rules_router
-
-DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
 
 
 def create_app(*, run_background_jobs: bool = False) -> FastAPI:
