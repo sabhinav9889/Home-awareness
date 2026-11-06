@@ -5,6 +5,7 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.router import router as auth_router
 from app.db import get_session
 from app.logging import configure_logging
 from app.redis import get_redis
@@ -25,6 +26,7 @@ def create_app() -> FastAPI:
         await redis.ping()
         return {"status": "ok", "db": "ok", "redis": "ok"}
 
+    app.include_router(auth_router)
     return app
 
 

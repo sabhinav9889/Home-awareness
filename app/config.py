@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     job_runner: Literal["celery", "inprocess"] = "celery"
     email_backend: Literal["console", "smtp"] = "console"
     smtp_host: str | None = None
-    smtp_port: str | None = None
+    smtp_port: int | None = None
     smtp_user: str | None = None
     smtp_password: str | None = None
     smtp_from: str | None = None

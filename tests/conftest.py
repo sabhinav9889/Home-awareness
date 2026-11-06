@@ -1,4 +1,5 @@
 import os
+import types
 
 import fakeredis.aioredis
 import httpx
@@ -8,7 +9,12 @@ from sqlalchemy.pool import NullPool
 
 import app.main as app_main  # imports every router/model before create_all
 from app.db import Base, get_session
+from app.email import get_email_sender
 from app.redis import get_redis
+
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://home:home@localhost:5432/home_test")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("JWT_SECRET", "test-secret-test-secret-test-secret-0123")
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+asyncpg://home:home@localhost:5432/home_test"
@@ -65,3 +71,42 @@ async def client(session, redis):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
     app.dependency_overrides.clear()
+
+
+class _Outbox(list):
+    async def send(self, to: str, subject: str, body: str) -> None:
+        self.append(types.SimpleNamespace(to=to, subject=subject, body=body))
+
+
+@pytest.fixture
+def outbox():
+    box = _Outbox()
+    app_main.app.dependency_overrides[get_email_sender] = lambda: box
+    yield box
+    app_main.app.dependency_overrides.pop(get_email_sender, None)
+
+
+@pytest.fixture
+async def signed_up(client, session, outbox):
+    """Factory: sign up, confirm via the outbox token, log in -> (member, headers)."""
+    from sqlalchemy import select
+
+    from app.auth.models import Member
+
+    async def _make(email="owner@example.com", household_name="Home", password="correct-horse-1"):
+        r = await client.post(
+            "/auth/signup",
+            json={"email": email, "password": password, "household_name": household_name},
+        )
+        assert r.status_code == 201, r.text
+        token = outbox[-1].body.split("token=")[1].split()[0]
+        assert (await client.post("/auth/confirm", json={"token": token})).status_code == 204
+        r = await client.post("/auth/login", json={"email": email, "password": password})
+        assert r.status_code == 200, r.text
+        headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+        member = (
+            await session.execute(select(Member).where(Member.email == email.strip().lower()))
+        ).scalar_one()
+        return member, headers
+
+    return _make
