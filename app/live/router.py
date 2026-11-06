@@ -65,6 +65,13 @@ async def live(
                 Member.email_confirmed,
             )
         )
+        if still is not None and principal.kind == "jwt":
+            # a password reset between the auth check and the subscribe bumped the version
+            still = await session.scalar(
+                select(Member.id).where(
+                    Member.id == member.id, Member.token_version == principal.token_version
+                )
+            )
         if still is not None and principal.agent_token_id is not None:
             still = await session.scalar(
                 select(AgentToken.id).where(

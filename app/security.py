@@ -24,6 +24,7 @@ class InvalidToken(Exception):
 class TokenClaims:
     member_id: int
     household_id: int
+    token_version: int = 0  # a JWT without `tv` predates token versions: version 0
 
 
 # argon2 is deliberately slow (tens of ms of CPU): run it in a worker thread so one login
@@ -43,12 +44,13 @@ def _verify(p: str, h: str) -> bool:
         return False
 
 
-def create_access_token(member_id: int, household_id: int) -> str:
+def create_access_token(member_id: int, household_id: int, token_version: int = 0) -> str:
     settings = get_settings()
     now = datetime.now(UTC)
     payload = {
         "sub": str(member_id),
         "hid": household_id,
+        "tv": token_version,
         "iat": now,
         "exp": now + timedelta(minutes=settings.jwt_ttl_minutes),
     }
@@ -60,7 +62,11 @@ def decode_access_token(t: str) -> TokenClaims:
         data = jwt.decode(
             t, get_settings().jwt_secret, algorithms=[_ALGORITHM], options={"require": ["exp"]}
         )
-        return TokenClaims(member_id=int(data["sub"]), household_id=int(data["hid"]))
+        return TokenClaims(
+            member_id=int(data["sub"]),
+            household_id=int(data["hid"]),
+            token_version=int(data.get("tv", 0)),
+        )
     except (jwt.PyJWTError, KeyError, ValueError, TypeError) as e:
         raise InvalidToken from e
 

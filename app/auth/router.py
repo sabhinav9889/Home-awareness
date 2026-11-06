@@ -3,12 +3,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from redis.asyncio import Redis
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import current_member
-from app.auth.models import EmailToken, Member
+from app.auth.models import AgentToken, EmailToken, Member
 from app.auth.schemas import (
     ConfirmIn,
     ConfirmResendIn,
@@ -25,7 +26,9 @@ from app.db import get_session
 from app.disclaimer import DISCLAIMER
 from app.email import EmailSender, get_email_sender
 from app.households.models import Household, Invite
+from app.live.hub import publish_disconnect
 from app.ratelimit import by_ip, rate_limit
+from app.redis import get_redis
 from app.rules.models import AlertPreference
 from app.security import (
     DUMMY_HASH,
@@ -197,7 +200,9 @@ async def login(body: LoginIn, session: Annotated[AsyncSession, Depends(get_sess
         raise HTTPException(status_code=401, detail="invalid credentials")
     if not member.email_confirmed:
         raise HTTPException(status_code=403, detail="email not confirmed")
-    return TokenOut(access_token=create_access_token(member.id, member.household_id))
+    return TokenOut(
+        access_token=create_access_token(member.id, member.household_id, member.token_version)
+    )
 
 
 @router.get("/me", response_model=MeOut, description=f"Current member. {DISCLAIMER}")
@@ -248,7 +253,9 @@ async def password_reset_request(
     description=f"Set a new password using the emailed reset token. {DISCLAIMER}",
 )
 async def password_reset_confirm(
-    body: ResetConfirmIn, session: Annotated[AsyncSession, Depends(get_session)]
+    body: ResetConfirmIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ):
     now = datetime.now(UTC)
     member_id = await session.scalar(
@@ -266,6 +273,16 @@ async def password_reset_confirm(
         raise HTTPException(status_code=400, detail="invalid or expired token")
     member = await session.get(Member, member_id)
     member.password_hash = await hash_password(body.new_password)
+    # Sign out every session in the same transaction: JWTs die with the version bump,
+    # agent tokens are revoked.
+    await session.execute(
+        update(Member).where(Member.id == member_id).values(token_version=Member.token_version + 1)
+    )
+    await session.execute(
+        update(AgentToken)
+        .where(AgentToken.member_id == member_id, AgentToken.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
     # Retire any other outstanding reset links for this member.
     await session.execute(
         update(EmailToken)
@@ -277,4 +294,8 @@ async def password_reset_confirm(
         .values(used_at=now)
     )
     await session.commit()
+    try:  # best effort: close open sockets now; a missed one is refused at its next check
+        await publish_disconnect(redis, [member_id])
+    except Exception as e:  # noqa: BLE001
+        log.warning("reset disconnect for member %s failed: %s", member_id, type(e).__name__)
     return Response(status_code=204)

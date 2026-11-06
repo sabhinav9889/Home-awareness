@@ -24,6 +24,7 @@ class Principal:
     member: Member
     kind: Literal["jwt", "agent"]
     agent_token_id: int | None = None
+    token_version: int = 0  # the version a JWT principal was authenticated under
 
 
 async def member_from_token(session: AsyncSession, token: str) -> Member | None:
@@ -33,7 +34,12 @@ async def member_from_token(session: AsyncSession, token: str) -> Member | None:
     except InvalidToken:
         return None
     member = await session.get(Member, claims.member_id)
-    if member is None or not member.email_confirmed or member.household_id != claims.household_id:
+    if (
+        member is None
+        or not member.email_confirmed
+        or member.household_id != claims.household_id
+        or member.token_version != claims.token_version  # signed out by a password reset
+    ):
         return None
     return member
 
@@ -67,7 +73,7 @@ async def principal_from_token(session: AsyncSession, raw: str) -> Principal | N
     if raw.startswith(AGENT_TOKEN_PREFIX):
         return await _member_from_agent_token(session, raw)
     member = await member_from_token(session, raw)
-    return None if member is None else Principal(member, "jwt")
+    return None if member is None else Principal(member, "jwt", token_version=member.token_version)
 
 
 def _unauthorized() -> HTTPException:

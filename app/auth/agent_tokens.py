@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,7 +28,17 @@ router = APIRouter(tags=["auth"])
 
 
 class AgentTokenIn(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
+    name: str = Field(max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def _clean(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be blank")
+        if any(not c.isprintable() for c in v):
+            raise ValueError("name must not contain control characters")
+        return v
 
 
 class AgentTokenCreated(BaseModel):
