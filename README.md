@@ -36,6 +36,10 @@ Configuration is environment variables only (see `.env.example` and `app/config.
 
 The bot token and webhook secret are kept out of logs.
 
+## Urgent sounds and quiet phones
+
+Sounds marked `severity: "urgent"` in `GET /sounds` (scream, glass breaking, smoke alarm, siren, loud bang / explosion, loud thud / fall, gasping) are pushed to ntfy with its highest priority (`Priority: urgent`, tag `rotating_light`); all other sounds, test alerts and sensor status messages use `high`. Whether that vibrates or breaks through silent / do-not-disturb depends on the notification settings of your ntfy app on the phone. Telegram has no priority levels, so its messages are the same for every sound. If your phone is often on silent, use ntfy for urgent sounds.
+
 ## Running tests
 
 Tests need Postgres (a `home_test` database, created by `docker/initdb`) and use fakeredis, so Redis is not required.

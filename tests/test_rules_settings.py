@@ -15,6 +15,24 @@ def test_catalog_has_17_sounds_and_three_default_on():
         get_sound("nope")
 
 
+def test_catalog_severity_urgent_list_is_exact():
+    assert {k for k, s in SOUNDS.items() if s.severity == "urgent"} == {
+        "scream",
+        "glass_breaking",
+        "smoke_alarm",
+        "siren",
+        "explosion",
+        "thud_fall",
+        "gasping",
+    }
+    assert {s.severity for s in SOUNDS.values()} == {"urgent", "normal"}
+
+
+async def test_sounds_endpoint_exposes_severity(client):
+    by_key = {s["key"]: s["severity"] for s in (await client.get("/sounds")).json()}
+    assert by_key["scream"] == "urgent" and by_key["doorbell"] == "normal"
+
+
 def test_dog_barking_defaults_to_5_in_60s():
     s = get_sound("dog_barking")
     assert (s.default_repeat, s.default_window_s, s.default_cooldown_s) == (5, 60, 120)

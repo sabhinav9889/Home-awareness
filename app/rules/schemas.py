@@ -2,7 +2,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from app.catalog import Reliability
+from app.catalog import Reliability, Severity
 
 NtfyTopic = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{20,64}$")]
 
@@ -17,6 +17,7 @@ class SoundOut(BaseModel):
     default_window_s: int
     default_cooldown_s: int
     default_min_confidence: float
+    severity: Severity
 
 
 class SoundSettingIn(BaseModel):

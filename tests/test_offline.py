@@ -92,6 +92,8 @@ async def test_offline_notifies_household_live_and_channels(
     assert tg.call_count == 1 and b"offline" in tg.calls[0].request.content
     assert text in tg.calls[0].request.content.decode()
     assert nt.call_count == 1 and nt.calls[0].request.content.decode() == text
+    assert nt.calls[0].request.headers["Priority"] == "high"
+    assert nt.calls[0].request.headers["Tags"] == "warning"
     assert not other.called
     assert TOKEN not in caplog.text  # telegram failed (500) but was logged without the token
 

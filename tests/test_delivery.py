@@ -151,7 +151,7 @@ async def test_delivers_to_all_enabled_channels(signed_up, session, factory, red
     assert set(d) == {"websocket", "telegram", "ntfy"}
     assert all(x.status == "sent" for x in d.values())
     assert tg.call_count == 1 and nt.call_count == 1
-    assert nt.calls[0].request.headers["Priority"] == "high"
+    assert nt.calls[0].request.headers["Priority"] == "urgent"  # scream is an urgent sound
     await session.refresh(alert)
     assert alert.status == "sent"
     ((member_id, msg),) = published
@@ -425,9 +425,7 @@ async def test_websocket_without_live_listener_is_failed_not_sent(
     assert alert.status == "partial"
 
 
-async def test_websocket_only_and_nobody_listening_fails_alert(
-    signed_up, session, factory, redis
-):
+async def test_websocket_only_and_nobody_listening_fails_alert(signed_up, session, factory, redis):
     member, _ = await signed_up()  # defaults: popup only; real (fake)redis, no subscriber
     alert = await _alert(session, member)
     await _run(alert, factory, redis)
@@ -480,7 +478,7 @@ async def test_slow_telegram_does_not_delay_ntfy(signed_up, session, factory, re
         await asyncio.wait_for(ntfy_sent.wait(), timeout=0.5)  # sequential sending times out
         order.append("telegram")
 
-    async def fast_ntfy(http, base, topic, text):
+    async def fast_ntfy(http, base, topic, text, **kw):
         order.append("ntfy")
         ntfy_sent.set()
 
@@ -516,7 +514,7 @@ async def test_outcome_finishing_during_another_commit_is_stored(
         tg_started.append(1)
         await release.wait()
 
-    async def fast_ntfy(http, base, topic, text):
+    async def fast_ntfy(http, base, topic, text, **kw):
         raise httpx.ConnectError("ntfy down")  # failed after 3 attempts: a distinct outcome
 
     def mid_flush(conn, cursor, statement, params, context, executemany):
@@ -564,7 +562,7 @@ async def test_failed_commit_cancels_remaining_sends(
         await asyncio.sleep(0.2)
         went_out.append("telegram")
 
-    async def fast_ntfy(http, base, topic, text):
+    async def fast_ntfy(http, base, topic, text, **kw):
         ntfy_done.append(1)
 
     real_commit = session.commit
@@ -583,3 +581,37 @@ async def test_failed_commit_cancels_remaining_sends(
     await asyncio.sleep(0.3)  # long enough for an orphaned telegram task to finish
     assert raised and went_out == []  # nothing sent after the alert was marked failed
     assert await session.scalar(select(Alert.status).where(Alert.id == alert_id)) == "failed"
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("sound", "priority", "tags"),
+    [
+        ("scream", "urgent", "rotating_light"),
+        ("smoke_alarm", "urgent", "rotating_light"),
+        ("doorbell", "high", "bell"),
+    ],
+)
+async def test_ntfy_priority_and_tags_follow_sound_severity(
+    signed_up, session, factory, redis, published, sound, priority, tags
+):
+    member, _ = await signed_up()
+    await _prefs(session, member, ntfy_topic="t")
+    alert = await _alert(session, member, sound=sound)
+    nt = respx.post("https://ntfy.test/t").mock(return_value=httpx.Response(200))
+    await _run(alert, factory, redis)
+    h = nt.calls[0].request.headers
+    assert (h["Priority"], h["Tags"]) == (priority, tags)
+
+
+@respx.mock
+async def test_test_alert_ntfy_is_high_priority_bell(signed_up, session, factory, redis, published):
+    member, _ = await signed_up()
+    await _prefs(session, member, ntfy_topic="t")
+    alert = await _alert(session, member)
+    alert.event_id, alert.sound_key = None, "test"
+    await session.flush()
+    nt = respx.post("https://ntfy.test/t").mock(return_value=httpx.Response(200))
+    await _run(alert, factory, redis)
+    h = nt.calls[0].request.headers
+    assert (h["Priority"], h["Tags"]) == ("high", "bell")

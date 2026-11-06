@@ -169,10 +169,12 @@ async def _deliver_claimed(
     household_tz = await session.scalar(
         select(Household.timezone).where(Household.id == alert.household_id)
     )
+    urgent = False
     if alert.event_id is None:
         label, text = "Test alert", TEST_TEXT
     else:
-        label = get_sound(alert.sound_key).label
+        sound = get_sound(alert.sound_key)
+        label, urgent = sound.label, sound.severity == "urgent"
         hhmm, tz = tz_label(at, household_tz)
         text = f"⚠️ {label} detected by {device_name} at {hhmm} {tz} — Home Awareness"
 
@@ -210,7 +212,13 @@ async def _deliver_claimed(
             (lambda: telegram.send_message(http, token, chat_id, text)) if token else None,
         )
     if topic:
-        new("ntfy", lambda: ntfy.publish(http, settings.ntfy_base_url, topic, text))
+        priority, tags = ("urgent", "rotating_light") if urgent else ("high", "bell")
+        new(
+            "ntfy",
+            lambda: ntfy.publish(
+                http, settings.ntfy_base_url, topic, text, priority=priority, tags=tags
+            ),
+        )
     await session.commit()  # every Delivery row exists (pending) before anything is sent
 
     # Websocket first (instant, local), plus channels that can't be sent at all.

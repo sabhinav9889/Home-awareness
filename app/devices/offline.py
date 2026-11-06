@@ -91,7 +91,7 @@ async def household_recipients(
 
 
 async def send_status_message(
-    recipients: list[Recipient], text: str, http: httpx.AsyncClient, settings: Any
+    recipients: list[Recipient], text: str, http: httpx.AsyncClient, settings: Any, tags: str
 ) -> None:
     """One attempt per channel; device status messages are best effort and never raise."""
     token = settings.telegram_bot_token
@@ -100,7 +100,7 @@ async def send_status_message(
             if r.channel == "telegram":
                 await telegram.send_message(http, token, r.address, text)
             else:
-                await ntfy.publish(http, settings.ntfy_base_url, r.address, text)
+                await ntfy.publish(http, settings.ntfy_base_url, r.address, text, tags=tags)
         except Exception as e:  # noqa: BLE001
             error = str(e) or type(e).__name__
             if token:
@@ -119,14 +119,14 @@ async def notify_back_online(recipients: list[Recipient], name: str) -> None:
         return
     settings = get_settings()
     async with httpx.AsyncClient(timeout=10) as http:
-        await send_status_message(recipients, online_text(name), http, settings)
+        await send_status_message(recipients, online_text(name), http, settings, "white_check_mark")
 
 
 async def _notify_members(
     session: AsyncSession, household_id: int, text: str, http: httpx.AsyncClient, settings: Any
 ) -> None:
     recipients = await household_recipients(session, household_id, settings)
-    await send_status_message(recipients, text, http, settings)
+    await send_status_message(recipients, text, http, settings, "warning")
 
 
 async def check_offline_devices(
