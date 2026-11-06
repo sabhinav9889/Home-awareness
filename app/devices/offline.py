@@ -117,8 +117,9 @@ async def check_offline_devices(
     Guards against false warnings after server-side downtime, when sensors were fine but
     nobody was listening to their heartbeats:
     1. Startup grace: a checker that has itself been up for less than OFFLINE_AFTER (passed
-       explicitly as `process_started_at`, e.g. the in-process loop's start) marks nothing:
-       sensors haven't had a full window to reach the restarted server yet.
+       explicitly as `process_started_at`: the in-process loop's start, or the Celery
+       worker's) marks nothing: sensors haven't had a full window to reach the restarted
+       server yet.
     2. Fleet silence: if even the newest heartbeat across ALL devices is older than
        OFFLINE_AFTER, the API itself most likely wasn't receiving heartbeats (it, its DB or
        the network in front of it was down), so nothing is marked. This is the checker's

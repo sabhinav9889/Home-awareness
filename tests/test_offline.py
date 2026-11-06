@@ -290,3 +290,19 @@ async def test_back_online_message_on_external_channels(
     assert TOKEN not in caplog.text
     assert (await client.post("/device/heartbeat", headers=dk)).status_code == 200
     assert nt.call_count == 1  # online -> online: no repeat
+
+
+async def test_celery_check_passes_worker_start_time(monkeypatch):
+    # A whole-server restart restarts the worker too: its own start time gives the same
+    # startup grace as the in-process loop, however long the server was down.
+    import app.alerts.celery_app as celery_app
+
+    seen = []
+
+    async def spy(session, r, now, *, process_started_at=None, http=None, settings=None):
+        seen.append(process_started_at)
+        return []
+
+    monkeypatch.setattr(offline, "check_offline_devices", spy)
+    await celery_app._check_offline()
+    assert seen == [celery_app.PROCESS_STARTED_AT]

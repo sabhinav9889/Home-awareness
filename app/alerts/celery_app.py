@@ -13,6 +13,9 @@ from app.config import get_settings
 from app.logging import protect_logs
 
 celery = Celery("home", broker=get_settings().redis_url)
+# Imported once in the worker's parent before it forks, so every child shares this value:
+# the offline check's startup grace (see check_offline_devices) counts from worker start.
+PROCESS_STARTED_AT = datetime.now(UTC)
 
 protect_logs()  # at import, and again after Celery (re)configures logging in worker/beat
 after_setup_logger.connect(lambda **_: protect_logs(), weak=False)
@@ -53,7 +56,9 @@ async def _check_offline() -> None:
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
         async with async_sessionmaker(engine, expire_on_commit=False)() as session:
-            await check_offline_devices(session, redis, datetime.now(UTC))
+            await check_offline_devices(
+                session, redis, datetime.now(UTC), process_started_at=PROCESS_STARTED_AT
+            )
     finally:
         await redis.aclose()
         await engine.dispose()
