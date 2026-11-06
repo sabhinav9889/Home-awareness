@@ -19,6 +19,7 @@ not touch the resource). Because A's request may be destructive, it runs last.
 """
 
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 import pytest
 
@@ -56,12 +57,33 @@ async def create_device(client, headers, outbox, tag) -> dict[str, int]:
     return {"device": r.json()["device_id"]}
 
 
-RESOURCE_CREATORS: list[Creator] = [create_member, create_device]
+async def create_event(client, headers, outbox, tag) -> dict[str, int]:
+    """Pair a device in the household owning `headers`, post one event, return its id."""
+    r = await client.post(
+        "/devices/pairing-codes", json={"name": f"ev-{tag}", "kind": "pi"}, headers=headers
+    )
+    assert r.status_code == 201, r.text
+    r = await client.post("/device/pair", json={"code": r.json()["code"]})
+    assert r.status_code == 201, r.text
+    body = {
+        "type": "scream",
+        "confidence": 0.9,
+        "occurred_at": datetime.now(UTC).isoformat(),
+    }
+    r = await client.post(
+        "/device/events", json=body, headers={"X-Device-Key": r.json()["device_key"]}
+    )
+    assert r.status_code == 202, r.text
+    return {"event": r.json()["event_id"]}
+
+
+RESOURCE_CREATORS: list[Creator] = [create_member, create_device, create_event]
 
 # (path, extractor(json) -> set of ids, resource name)
 LISTING_ROUTES: list[tuple[str, Callable[[dict], set[int]], str]] = [
     ("/households/me", lambda j: {m["id"] for m in j["members"]}, "member"),
     ("/devices", lambda j: {d["id"] for d in j}, "device"),
+    ("/events", lambda j: {e["id"] for e in j}, "event"),
 ]
 
 

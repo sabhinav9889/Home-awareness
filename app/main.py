@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.router import router as auth_router
 from app.db import get_session
 from app.devices.router import router as devices_router
+from app.events.router import router as events_router
 from app.households.router import router as households_router
 from app.logging import configure_logging
 from app.redis import get_redis
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
     app.include_router(households_router)
     app.include_router(rules_router)
     app.include_router(devices_router)
+    app.include_router(events_router)
     return app
 
 
