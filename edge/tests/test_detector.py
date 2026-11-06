@@ -3,7 +3,6 @@ import pytest
 
 from ha_edge.detector import Detection, Detector
 
-NAMES = ["a", "b", "c", "d"]
 INDEX = {"scream": [0], "siren": [1, 2], "doorbell": [3]}
 ALL = frozenset(INDEX)
 
@@ -60,3 +59,9 @@ def test_bad_shape_raises():
         d.process(np.zeros(3), 0.0, ALL, False)
     with pytest.raises(ValueError):
         d.process(np.zeros((2, 4)), 0.0, ALL, False)
+
+
+def test_enabling_after_disabled_emits_immediately():
+    d = Detector(INDEX)
+    assert d.process(sc(i0=0.9), 0.0, frozenset({"siren"}), False) == []
+    assert [x.sound for x in d.process(sc(i0=0.9), 0.5, ALL, False)] == ["scream"]

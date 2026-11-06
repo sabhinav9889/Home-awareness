@@ -2,18 +2,25 @@
 
 from collections.abc import Sequence
 
+# Generic classes (Door, Dog, Breathing, Breaking, Bang, Grunt) are deliberately omitted:
+# they fire constantly in ordinary homes and would flood users with false alarms.
 YAMNET_LABELS: dict[str, tuple[str, ...]] = {
     "scream": ("Screaming",),
     "shouting": ("Shout", "Yell", "Bellow"),
     "crying": ("Crying, sobbing", "Baby cry, infant cry", "Whimper"),
-    "moaning": ("Groan", "Grunt"),
-    "gasping": ("Gasp", "Wheeze", "Breathing"),
+    # Grunt omitted: too common in everyday exertion.
+    "moaning": ("Groan"),
+    # Breathing omitted: fires on normal breathing.
+    "gasping": ("Gasp", "Wheeze"),
     "coughing": ("Cough",),
-    "glass_breaking": ("Glass", "Shatter", "Breaking"),
-    "door_slam": ("Slam", "Door"),
+    # Breaking omitted: matches any breaking object.
+    "glass_breaking": ("Glass", "Shatter"),
+    # Door omitted: matches every door sound.
+    "door_slam": ("Slam"),
     "knocking": ("Knock",),
     "car_alarm": ("Car alarm",),
-    "dog_barking": ("Bark", "Dog", "Bow-wow"),
+    # Dog omitted: matches panting and whining, not just barking.
+    "dog_barking": ("Bark", "Bow-wow"),
     "smoke_alarm": ("Smoke detector, smoke alarm", "Fire alarm"),
     "siren": (
         "Siren",
@@ -23,7 +30,8 @@ YAMNET_LABELS: dict[str, tuple[str, ...]] = {
         "Fire engine, fire truck (siren)",
         "Civil defense siren",
     ),
-    "explosion": ("Explosion", "Bang"),
+    # Bang omitted: matches routine knocks and pops.
+    "explosion": ("Explosion"),
     "running_water": (
         "Water tap, faucet",
         "Sink (filling or washing)",

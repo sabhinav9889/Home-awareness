@@ -48,3 +48,9 @@ def test_build_index_with_real_class_map():
     for key, idxs in index.items():
         assert len(idxs) == len(YAMNET_LABELS[key])
         assert [names[i] for i in idxs] == list(YAMNET_LABELS[key])
+
+
+def test_no_generic_labels():
+    banned = {"Door", "Dog", "Breathing", "Breaking", "Bang", "Grunt"}
+    used = {label for labels in YAMNET_LABELS.values() for label in labels}
+    assert not banned & used
