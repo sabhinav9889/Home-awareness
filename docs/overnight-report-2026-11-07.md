@@ -29,7 +29,11 @@ per-member quiet hours, a Home Assistant/MQTT bridge. Rejected as conflicting wi
 emergency-service calling, radar/camera fall detection, a paid cloud tier.
 
 ### 📝 Plan 2 — laptop sensor + alert agent: plan written (`docs/superpowers/plans/2026-11-07-plan-2-edge-client.md`)
-- (status updated below as it runs)
+- Branch `plan-2-edge-client` (not merged yet). Done and reviewed so far: package skeleton + config (0600 files), server client with an in-memory retry queue, YAMNet label map + detector, **YAMNet running on this laptop (3.4 ms per window, model checksum-verified)**, microphone capture pinned to one mic (PipeWire), and the "is media playing through speakers?" probe (headphones correctly ignored).
+- PortAudio isn't installed and I can't sudo, so audio goes through PipeWire's own tools (`pw-record`, `pw-dump`, `pw-play`) — verified on your built-in mic.
+- I removed six generic YAMNet labels ("Door", "Dog", "Breathing", "Breaking", "Bang", "Grunt") because they'd fire on everyday sounds and flood you with alerts.
+- **Measured accuracy (ESC-50, 2,000 real clips) — `docs/accuracy.md`:** F1 at threshold 0.30 — dog barking 0.88, glass breaking 0.84, crying 0.81, siren 0.81, knocking 0.74, coughing 0.66. These are clean-recording upper bounds. Every current reliability label in the catalog matches. Siren and coughing do better at 0.50 → per-sound thresholds are a good next enhancement. Scream, smoke alarm, doorbell, thud and 7 others have no ESC-50 class, so they stay unmeasured.
+- A usage limit paused everything from about 02:30 to 04:00; work resumed automatically.
 
 ## Rulings I made on your behalf (Plan 1)
 Each is something the plan/spec didn't settle; "cost if wrong" in brackets.
