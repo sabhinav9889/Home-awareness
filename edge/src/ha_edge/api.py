@@ -7,6 +7,7 @@ The queue is memory-only by design (privacy and simplicity).
 from __future__ import annotations
 
 import logging
+import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,6 +20,9 @@ log = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_S = 10.0
 DEFAULT_RETRY_AFTER_S = 1.0
 MAX_QUEUE_ITEMS = 500
+REJECT_LOG_EVERY_S = 600.0  # the same rejection reason is logged at most every 10 minutes
+SKEW_TEXT = "10 minutes"  # the server's occurred_at skew check (app/events/schemas.py)
+CLOCK_SKEW_MESSAGE = "This laptop's clock is more than 10 minutes off — fix the system time"
 
 
 class ApiError(Exception):
@@ -42,9 +46,10 @@ class ServerUnavailable(ApiError):
 class Rejected(ApiError):
     """Server rejected the request (4xx other than 401/429); do not retry."""
 
-    def __init__(self, detail: str = ""):
+    def __init__(self, detail: str = "", status: int | None = None):
         super().__init__(detail)
         self.detail = detail
+        self.status = status
 
 
 class PairingFailed(ApiError):
@@ -65,11 +70,23 @@ class EventResult:
 
 
 def _detail(resp: httpx.Response) -> str:
+    """The server's reason. Validation errors (a list) become their messages only: the
+    echoed input varies per request and would defeat per-reason log rate limiting."""
     try:
         d = resp.json().get("detail", "")
-        return d if isinstance(d, str) else str(d)
     except (ValueError, AttributeError):
         return ""
+    if isinstance(d, str):
+        return d
+    if isinstance(d, list):
+        msgs = [str(e["msg"]) for e in d if isinstance(e, dict) and "msg" in e]
+        if msgs:
+            return "; ".join(msgs)
+    return str(d)
+
+
+def _rejected(resp: httpx.Response) -> Rejected:
+    return Rejected(_detail(resp) or f"HTTP {resp.status_code}", resp.status_code)
 
 
 def _retry_after(resp: httpx.Response) -> float:
@@ -90,6 +107,10 @@ class ServerClient:
         self._base = base_url.rstrip("/")
         self._key = device_key
         self._http = http or httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_S)
+
+    @property
+    def base_url(self) -> str:
+        return self._base
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -117,7 +138,7 @@ class ServerClient:
         if resp.status_code == 400:
             raise PairingFailed(_detail(resp) or "invalid or expired pairing code")
         if resp.status_code != 201:
-            raise Rejected(_detail(resp) or f"HTTP {resp.status_code}")
+            raise _rejected(resp)
         try:
             data = resp.json()
             return int(data["device_id"]), str(data["device_key"])
@@ -127,7 +148,7 @@ class ServerClient:
     async def heartbeat(self) -> DeviceConfig:
         resp = await self._post("/device/heartbeat")
         if resp.status_code != 200:
-            raise Rejected(_detail(resp) or f"HTTP {resp.status_code}")
+            raise _rejected(resp)
         try:
             data = resp.json()
             return DeviceConfig(
@@ -146,7 +167,7 @@ class ServerClient:
         }
         resp = await self._post("/device/events", body)
         if resp.status_code != 202:
-            raise Rejected(_detail(resp) or f"HTTP {resp.status_code}")
+            raise _rejected(resp)
         # 202 means the server accepted the event. If the body is unreadable, still report
         # success (event_id=-1) so the queue does not resend and create a duplicate.
         try:
@@ -166,11 +187,45 @@ class _Pending:
 class EventQueue:
     """In-memory FIFO of unsent events. Never persisted. Capped; oldest dropped first."""
 
-    def __init__(self, max_age_s: float = 600, max_items: int = MAX_QUEUE_ITEMS):
+    def __init__(
+        self,
+        max_age_s: float = 600,
+        max_items: int = MAX_QUEUE_ITEMS,
+        clock: Callable[[], float] = time.monotonic,
+    ):
         self._max_age = timedelta(seconds=max_age_s)
         self._max_items = max_items
         self._items: deque[_Pending] = deque()
         self._overflow_logged = False
+        self._clock = clock
+        self._reject_logged: dict[str, float] = {}  # reason -> when last logged
+
+    def _log_rejected(self, sound: str, err: Rejected, client: ServerClient) -> None:
+        """Say why the server dropped an event, once per reason per 10 minutes."""
+        if err.status == 404:
+            reason = "404"
+            base = getattr(client, "base_url", "the server")
+            text = (
+                f"server rejected a {sound} event: HTTP 404 Not Found from {base} — "
+                "check the server URL (pair again with the right --server)"
+            )
+        elif SKEW_TEXT in err.detail:
+            reason = "clock-skew"
+            text = f"server rejected a {sound} event: {CLOCK_SKEW_MESSAGE}"
+        else:
+            reason = err.detail
+            text = None
+        now = self._clock()
+        last = self._reject_logged.get(reason)
+        if last is not None and now - last < REJECT_LOG_EVERY_S:
+            return
+        if len(self._reject_logged) >= 100:
+            self._reject_logged.clear()
+        self._reject_logged[reason] = now
+        if text is None:
+            log.warning("server rejected a %s event: %s", sound, err.detail)
+        else:
+            log.warning("%s", text)
 
     def __len__(self) -> int:
         return len(self._items)
@@ -206,7 +261,7 @@ class EventQueue:
         """Send oldest first; return the number delivered.
 
         Stale items (older than max_age_s), items whose sound fails ``allow`` and
-        Rejected items are dropped.
+        Rejected items are dropped (the reason is logged, rate-limited per reason).
         ServerUnavailable and RateLimited propagate with the failed item (and the rest)
         kept; the caller backs off (RateLimited.retry_after_s). DeviceRevoked propagates.
         """
@@ -221,8 +276,9 @@ class EventQueue:
                 continue
             try:
                 await client.send_event(item.sound, item.confidence, item.occurred_at)
-            except Rejected:
+            except Rejected as e:
                 self._pop_if_head(item)
+                self._log_rejected(item.sound, e, client)
                 continue
             self._pop_if_head(item)
             sent += 1

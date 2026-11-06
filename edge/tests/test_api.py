@@ -290,3 +290,83 @@ async def test_drain_skips_disallowed_sounds():
 
     assert await q.drain(Fake(), NOW, allow=lambda s: s == "doorbell") == 1
     assert sent == ["doorbell"] and len(q) == 0
+
+
+# --- final review: rejected events never vanish silently ---------------------------------
+
+SKEW_422 = {
+    "detail": [
+        {
+            "type": "value_error",
+            "loc": ["body", "occurred_at"],
+            "msg": "Value error, occurred_at is more than 10 minutes from server time",
+            "input": "2026-11-07T11:00:00+00:00",
+        }
+    ]
+}
+
+
+class Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+def _warnings(caplog):
+    return [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+@respx.mock
+async def test_rejected_event_is_logged_once_per_detail_per_10_min(client, caplog):
+    caplog.set_level(logging.INFO)
+    respx.post(f"{BASE}/device/events").respond(422, json={"detail": "unknown sound type"})
+    clock = Clock()
+    q = EventQueue(clock=clock)
+    q.put("doorbell", 0.5, NOW)
+    q.put("knock", 0.5, NOW)
+    await q.drain(client, NOW)
+    assert _warnings(caplog) == ["server rejected a doorbell event: unknown sound type"]
+    clock.t = 599.0
+    q.put("doorbell", 0.5, NOW)
+    await q.drain(client, NOW)
+    assert len(_warnings(caplog)) == 1  # same detail within 10 min: not repeated
+    clock.t = 600.0
+    q.put("knock", 0.5, NOW)
+    await q.drain(client, NOW)
+    assert _warnings(caplog)[1:] == ["server rejected a knock event: unknown sound type"]
+
+
+@respx.mock
+async def test_clock_skew_rejection_says_fix_the_system_time(client, caplog):
+    caplog.set_level(logging.INFO)
+    respx.post(f"{BASE}/device/events").respond(422, json=SKEW_422)
+    q = EventQueue(clock=Clock())
+    q.put("doorbell", 0.5, NOW)
+    q.put("doorbell", 0.5, NOW + timedelta(seconds=1))  # different input, same problem
+    await q.drain(client, NOW)
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    assert "This laptop's clock is more than 10 minutes off — fix the system time" in warnings[0]
+    assert "doorbell" in warnings[0]
+
+
+@respx.mock
+async def test_404_on_send_points_at_the_server_url(client, caplog):
+    caplog.set_level(logging.INFO)
+    respx.post(f"{BASE}/device/events").respond(404, json={"detail": "Not Found"})
+    q = EventQueue(clock=Clock())
+    q.put("doorbell", 0.5, NOW)
+    await q.drain(client, NOW)
+    (msg,) = _warnings(caplog)
+    assert "404" in msg and BASE in msg and "server URL" in msg
+
+
+@respx.mock
+async def test_rejected_carries_status_and_readable_detail(client):
+    respx.post(f"{BASE}/device/events").respond(422, json=SKEW_422)
+    with pytest.raises(Rejected) as e:
+        await client.send_event("doorbell", 0.5, NOW)
+    assert e.value.status == 422
+    assert e.value.detail == "Value error, occurred_at is more than 10 minutes from server time"

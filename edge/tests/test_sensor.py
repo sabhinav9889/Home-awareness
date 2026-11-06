@@ -348,3 +348,16 @@ async def test_heartbeat_interval_clamped_to_at_least_1s():
     await until(lambda: client.heartbeats >= 3)
     await finish(task, stop)
     assert 0 not in slept and slept.count(1) >= 2
+
+
+async def test_heartbeat_404_points_at_the_server_url(caplog):
+    from ha_edge.api import Rejected
+
+    caplog.set_level(logging.INFO)
+    client = FakeClient([Rejected("Not Found", 404)])
+    task, stop = start(client)
+    await until(lambda: client.heartbeats >= 3)
+    assert await finish(task, stop) == EXIT_OK
+    errors = [r.getMessage() for r in caplog.records if "404" in r.getMessage()]
+    assert len(errors) == 1  # said once, not every retry
+    assert "http://server" in errors[0] and "server URL" in errors[0]

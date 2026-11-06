@@ -64,7 +64,7 @@ async def run_sensor(
     """
     names = list(classifier.class_names)
     detector = Detector(build_index(names), num_classes=len(names))
-    queue = EventQueue()
+    queue = EventQueue(clock=monotonic)
     enabled: frozenset[str] = frozenset()  # empty until the first successful heartbeat
     code = EXIT_OK
 
@@ -101,6 +101,7 @@ async def run_sensor(
     async def heartbeat_task() -> None:
         nonlocal enabled
         interval: int | None = None  # None until the first success
+        said_404 = False
         while True:
             try:
                 dc = await client.heartbeat()
@@ -112,6 +113,14 @@ async def run_sensor(
                 wait = interval if interval is not None else FIRST_HEARTBEAT_RETRY_S
                 if isinstance(e, RateLimited):
                     wait = max(wait, e.retry_after_s)
+                if isinstance(e, Rejected) and e.status == 404 and not said_404:
+                    said_404 = True
+                    log.error(
+                        "The server at %s answered 404 Not Found: check the server URL "
+                        "(pair again with `ha-sensor pair --server URL --code CODE`). "
+                        "Nothing is detected until a heartbeat succeeds.",
+                        cfg.base_url,
+                    )
                 log.warning("heartbeat failed (%s); retrying in %g s", e, wait)
                 await sleep(wait)
                 continue
