@@ -6,15 +6,18 @@ import uuid
 
 # Telegram's URL embeds the bot token: https://api.telegram.org/bot<id>:<secret>/...
 _TOKEN_RE = re.compile(r"bot\d+:[A-Za-z0-9_-]+")
+# uvicorn logs the WebSocket path with its query string: "WebSocket /ws?token=<JWT|ha_agent_..>"
+_QUERY_TOKEN_RE = re.compile(r"(token=)[^&\s\"']+")
 _installed = False
 
 
 def redact(text: str) -> str:
-    return _TOKEN_RE.sub("bot***", text)
+    return _QUERY_TOKEN_RE.sub(r"\1***", _TOKEN_RE.sub("bot***", text))
 
 
 def protect_logs() -> None:
-    """Keep the Telegram bot token out of every log, in every process (API and Celery).
+    """Keep the Telegram bot token and `token=` query values (the live socket's JWT or agent
+    token) out of every log, in every process (API and Celery).
 
     Idempotent. A record factory (not a handler filter) so it applies whatever handlers a
     framework installs later, and httpx/httpcore are quieted since they log request URLs.
@@ -44,6 +47,9 @@ def configure_logging(level: int = logging.INFO) -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     protect_logs()
+    # Belt and braces with redact(): uvicorn.error logs every WebSocket path (query string
+    # included) at INFO. Our own RequestLogMiddleware already logs the route template.
+    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 
 
 request_log = logging.getLogger("app.request")
