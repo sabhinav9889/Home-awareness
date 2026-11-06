@@ -23,6 +23,7 @@ from app.db import get_session
 from app.email import EmailSender, get_email_sender
 from app.households.models import Household, Invite
 from app.ratelimit import by_ip, rate_limit
+from app.rules.models import AlertPreference
 from app.security import (
     create_access_token,
     hash_password,
@@ -91,6 +92,7 @@ async def signup(
     except IntegrityError:
         await session.rollback()
         raise HTTPException(status_code=409, detail="email already registered") from None
+    session.add(AlertPreference(member_id=member.id, household_id=household_id))
     token = new_token("cf_")
     session.add(
         EmailToken(

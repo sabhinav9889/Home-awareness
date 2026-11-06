@@ -2,14 +2,14 @@
 
 How a later task extends this file (append only, in the same commit as the feature):
 
-1. Route: append `(method, "/path/{a_<name>}", body_or_None)` to HOUSEHOLD_SCOPED_ROUTES.
-   `{a_<name>}` / `{b_<name>}` are ids of resources owned by household A / B.
+1. Route: append `(method, "/path/{a_<name>_id}", body_or_None)` to HOUSEHOLD_SCOPED_ROUTES.
+   `{a_<name>_id}` / `{b_<name>_id}` are ids of resources owned by household A / B.
 2. Resource: write `async def create_<name>(client, headers, outbox, tag) -> dict[str, int]`
    that creates one resource in the household owning `headers` and returns
    `{"<name>": id}`; append it to RESOURCE_CREATORS. The harness creates one for A and one
-   for B and exposes them as the placeholders `a_<name>` and `b_<name>`.
+   for B and exposes them as the placeholders `a_<name>_id` and `b_<name>_id`.
 3. Listing: append `(path, extractor, "<name>")` to LISTING_ROUTES, where extractor maps the
-   listing's JSON to the set of ids it contains. A's listing must contain `a_<name>` and
+   listing's JSON to the set of ids it contains. A's listing must contain `a_<name>_id` and
    never `b_<name>`.
 
 Each scoped route is checked in this order: B requests A's resource -> must be Tenant's exact

@@ -10,6 +10,7 @@ from app.db import get_session
 from app.households.router import router as households_router
 from app.logging import configure_logging
 from app.redis import get_redis
+from app.rules.router import router as rules_router
 
 DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
 
@@ -29,6 +30,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(households_router)
+    app.include_router(rules_router)
     return app
 
 
