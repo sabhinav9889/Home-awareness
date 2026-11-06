@@ -13,10 +13,6 @@ dependencies = [
   "desktop-notifier",
 ]
 
-[project.optional-dependencies]
-# Needs the system PortAudio library (apt install libportaudio2).
-portaudio = ["sounddevice"]
-
 [project.scripts]
 ha-sensor = "ha_edge.cli:sensor_main"
 ha-agent = "ha_edge.cli:agent_main"

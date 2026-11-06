@@ -3,13 +3,72 @@
 Home-awareness tool. Not a medical device, security alarm, or emergency service.
 
 Edge client for Home Awareness: `ha-sensor` turns a laptop into a sound sensor, `ha-agent`
-shows alerts and plays an alarm.
+shows alerts and plays an alarm. Run every command below from this `edge/` directory.
 
-    uv sync --dev
-    uv sync --extra portaudio   # live microphone capture; needs libportaudio2
+## Requirements
 
-Config lives in the platformdirs user config dir (`sensor.json`, `agent.json`, mode 0600);
-set `HA_EDGE_CONFIG_DIR` to override.
+- Linux with PipeWire and its command-line tools `pw-record`, `pw-dump` and `pw-play`
+  (Ubuntu/Fedora desktops ship them; on Debian/Ubuntu they are in `pipewire-bin`).
+- Python 3.12 and [uv](https://docs.astral.sh/uv/).
+- A Home Awareness server you can log in to (see the [root README](../README.md)).
+
+Install:
+
+    cd edge && uv sync
+
+(`uv sync --dev` also installs the test tools: `uv run pytest -q`.)
+
+Config lives in the platformdirs user config dir (`sensor.json`, `agent.json`, mode 0600, in
+a directory created with mode 0700); set `HA_EDGE_CONFIG_DIR` to override.
+
+## Sound sensor (`ha-sensor`) quick start
+
+1. Download and verify the YAMNet sound model (once, ~4 MB, from Google's public URL with
+   a pinned SHA-256):
+
+       uv run ha-sensor fetch-model
+
+2. Create a pairing code on the server. Until the dashboard lands, use the API: log in,
+   then `POST /devices/pairing-codes` with `{"name": "Kitchen laptop", "kind": "laptop"}`
+   (in the server's `/docs` page, Authorize with your login token first). The 8-character
+   code is valid for 10 minutes and works once.
+3. Pair this laptop (the device key is stored in `sensor.json` and never printed again):
+
+       uv run ha-sensor pair --server https://example.org --code ABCD1234
+
+4. See which microphones there are (`*` marks the system default input):
+
+       uv run ha-sensor devices
+
+5. Start listening (Ctrl-C or SIGTERM stops it):
+
+       uv run ha-sensor run                  # the default input, or the saved one
+       uv run ha-sensor run --mic "ALC257"   # a name, or a unique part of it
+
+What to know:
+
+- **The microphone is pinned.** The first `run` (or `run --mic NAME`) saves the exact
+  device name; later runs use exactly that device. If it disappears (unplugged, or a
+  headset taking over), the sensor **never switches to another input**: it logs the
+  problem and exits with code 4. Pick a new one with `run --mic NAME`.
+- **Nothing is detected until the first heartbeat succeeds.** The server's heartbeat says
+  which sounds this household enabled; until it answers, every detection is dropped (it
+  retries every 5 s). Only enabled sounds are ever sent, and only the sound type, a
+  confidence and a time: raw audio never leaves the process and is never written to disk.
+- **Audio playing through the speakers raises the detection threshold** (from 0.30 to
+  0.50 per sound), so a film is less likely to trigger alerts. This also makes real sounds
+  slightly harder to catch while something plays, and it isn't perfect: loud media can
+  still trigger. Playback through **headphones** doesn't count (the mic can't hear it).
+  Only the **default output** is considered: audio sent to another output device is
+  treated as not playing.
+- Events the server rejects are dropped with a logged reason (at most once per reason per
+  10 minutes). If the laptop's clock is more than 10 minutes off, every event is rejected:
+  fix the system time. A wrong `--server` shows up as an HTTP 404.
+
+`ha-sensor` exit codes: 0 stopped normally, 1 network or model error (or the microphones
+can't be listed), 2 usage error, unusable config, pairing refused or rate limited, 3 not
+paired, 4 microphone not found or lost, 5 this sensor was removed from the household (pair
+again).
 
 Accuracy measurements per sound: see [docs/accuracy.md](../docs/accuracy.md) (harness: `scripts/eval_accuracy.py`).
 
@@ -20,14 +79,19 @@ enabled "alarm" in your alert preferences, an 880/660 Hz alarm plays through the
 output** — the headphones while they are in use — for up to 30 s per alert (3 minutes at
 most in a row).
 
-    ha-agent login --server https://example.org --email you@example.org   # asks for the password
-    ha-agent run          # Ctrl-C (or SIGTERM) stops any alarm and exits 0
-    ha-agent test-alarm   # plays the alarm for 3 s
+    uv run ha-agent login --server https://example.org --email you@example.org   # asks for the password
+    uv run ha-agent run          # Ctrl-C (or SIGTERM) stops any alarm and exits 0
+    uv run ha-agent test-alarm   # plays the alarm for 3 s
 
-- `login` stores only the access token (valid 24 h) and your member id in `agent.json`; the password is never
+- `login` stores only the access token and your member id in `agent.json`; the password is never
   stored, printed or logged, and neither is the token.
-- Popup buttons: **I'm on it** (acknowledges for the household and stops the alarm) and
-  **Stop alarm** (either one silences the alarm). When someone acknowledges an alert you
+- **Log in again every 24 hours.** The stored login is the normal 24 h access token (until
+  dedicated agent tokens land). When it runs out, alerts stop reaching this laptop: `run`
+  says when it expires on start, warns when less than 2 h are left, and exits 6 with
+  "Please log in again" once the server rejects it.
+- Popup buttons: **I'm on it** (acknowledges for the household and stops the alarm) and,
+  on alarm alerts, **Stop alarm** (either one silences the alarm). Popup-only alerts show
+  just **I'm on it**. When someone acknowledges an alert you
   received, you see who, and the alarm stops once every alert it is sounding for has been
   acknowledged. Acks for other members' alerts (including their test alerts) are ignored.
   Each alarm alert rings for up to 30 s; a new alarm alert while one sounds restarts the
