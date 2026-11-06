@@ -1,6 +1,6 @@
 """Console entry points: ``ha-sensor`` and ``ha-agent``.
 
-The device key is never printed or logged.
+The device key, the agent's password and its access token are never printed or logged.
 """
 
 from __future__ import annotations
@@ -8,9 +8,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import getpass
 import logging
 import signal
 import sys
+import time
 from collections.abc import Sequence
 
 DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
@@ -21,6 +23,8 @@ EXIT_USAGE = 2
 EXIT_NOT_PAIRED = 3
 EXIT_MIC_LOST = 4
 EXIT_REVOKED = 5  # returned by sensor.run_sensor (same values as ha_edge.sensor)
+EXIT_NOT_LOGGED_IN = 3
+EXIT_RELOGIN = 6  # returned by agent.run_agent: the server rejected the stored token
 
 
 def _parser(prog: str, description: str) -> argparse.ArgumentParser:
@@ -200,6 +204,119 @@ def _cmd_fetch_model(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def agent_main(argv: Sequence[str] | None = None) -> int:
-    _parser("ha-agent", "Show Home Awareness alerts on this laptop.").parse_args(argv)
+def _cmd_login(args: argparse.Namespace) -> int:
+    import httpx
+
+    from ha_edge import config
+
+    base = args.server.rstrip("/")
+    try:
+        password = getpass.getpass(f"Password for {args.email}: ")
+    except (KeyboardInterrupt, EOFError):
+        print(file=sys.stderr)
+        return EXIT_OK
+    try:
+        with httpx.Client(timeout=15) as http:
+            r = http.post(f"{base}/auth/login", json={"email": args.email, "password": password})
+    except httpx.HTTPError as e:
+        _err(f"Login failed: cannot reach the server at {base} ({type(e).__name__}).")
+        return EXIT_ERROR
+    del password
+    if r.status_code == 401:
+        _err("Login failed: wrong email or password.")
+        return EXIT_USAGE
+    if r.status_code == 403:
+        _err("Login failed: email not confirmed. Use the link in the confirmation email.")
+        return EXIT_USAGE
+    if r.status_code == 429:
+        _err("Login failed: Too many attempts. Wait a minute and try again.")
+        return EXIT_USAGE
+    token = None
+    if r.status_code == 200:
+        with contextlib.suppress(ValueError, AttributeError):
+            token = r.json().get("access_token")
+    if not isinstance(token, str) or not token:
+        _err(f"Login failed: unexpected server response (HTTP {r.status_code}).")
+        return EXIT_ERROR
+    config.save_agent(config.AgentConfig(base, args.email, token))
+    print(f"Logged in as {args.email}. Now run `ha-agent run`.")
     return EXIT_OK
+
+
+def _cmd_agent_run(args: argparse.Namespace) -> int:
+    import httpx
+
+    from ha_edge import agent, config, notify
+
+    try:
+        cfg = config.load_agent()
+    except config.ConfigError as e:
+        _err(str(e))
+        return EXIT_USAGE
+    if cfg is None:
+        _err("Not logged in. Run `ha-agent login --server URL --email EMAIL` first.")
+        return EXIT_NOT_LOGGED_IN
+    _setup_logging()
+
+    async def main() -> int:
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with contextlib.suppress(NotImplementedError, RuntimeError):
+                loop.add_signal_handler(sig, stop.set)
+        alarm = notify.AlarmPlayer()
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15, read=None)) as http:
+            try:
+                return await agent.run_agent(
+                    cfg,
+                    connect=agent.ws_connector(http),
+                    notifier=notify.DesktopNotifier(),
+                    alarm=alarm,
+                    clock=time.monotonic,
+                    http=http,
+                    stop=stop,
+                )
+            finally:
+                await alarm.aclose()
+
+    print(f"Listening for alerts from {cfg.base_url} as {cfg.email}. Ctrl-C to stop.")
+    rc = asyncio.run(main())
+    if rc == EXIT_RELOGIN:
+        _err("The server rejected this login. Run `ha-agent login` again.")
+    return rc
+
+
+def _cmd_test_alarm(args: argparse.Namespace) -> int:
+    from ha_edge import notify
+
+    async def main() -> int:
+        player = notify.AlarmPlayer(max_s=3.0)
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with contextlib.suppress(NotImplementedError, RuntimeError):
+                loop.add_signal_handler(sig, player.stop)
+        await player.play()
+        if player.unavailable:
+            _err("Cannot play the alarm: pw-play (PipeWire) is not available.")
+            return EXIT_ERROR
+        await player.wait()
+        return EXIT_OK
+
+    print("Playing the alarm for 3 s on the default output…")
+    return asyncio.run(main())
+
+
+def agent_main(argv: Sequence[str] | None = None) -> int:
+    parser = _parser("ha-agent", "Show Home Awareness alerts on this laptop.")
+    sub = parser.add_subparsers(dest="command", required=True)
+    lg = sub.add_parser("login", help="log in; stores only an access token (valid 24 h)")
+    lg.add_argument("--server", required=True, help="server URL, e.g. https://example.org")
+    lg.add_argument("--email", required=True, help="your Home Awareness email")
+    sub.add_parser("run", help="show alerts as popups and sound the alarm")
+    sub.add_parser("test-alarm", help="play the alarm for 3 s on the default output")
+    args = parser.parse_args(argv)
+    commands = {"login": _cmd_login, "run": _cmd_agent_run, "test-alarm": _cmd_test_alarm}
+    try:
+        return commands[args.command](args)
+    except KeyboardInterrupt:  # Ctrl-C before the loop installs its signal handlers
+        return EXIT_OK

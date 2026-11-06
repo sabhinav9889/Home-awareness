@@ -217,3 +217,141 @@ def test_run_mic_listing_failure_exits_1(run_env, monkeypatch, capsys):
     monkeypatch.setattr(audio, "list_inputs", broken)
     assert cli.sensor_main(["run"]) == 1
     assert "pw-dump" in capsys.readouterr().err
+
+
+# --- ha-agent ---------------------------------------------------------------------------
+
+PASSWORD = "hunter2-very-secret"
+JWT = "header.payload.sig-agent-token"
+
+
+@respx.mock
+def test_agent_login_stores_token_not_password(cfgdir, monkeypatch, capsys, caplog):
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": PASSWORD)
+    route = respx.post("http://srv/auth/login").mock(
+        return_value=httpx.Response(200, json={"access_token": JWT, "token_type": "bearer"})
+    )
+    rc = cli.agent_main(["login", "--server", "http://srv/", "--email", "me@example.com"])
+    assert rc == 0
+    assert json.loads(route.calls[0].request.content) == {
+        "email": "me@example.com",
+        "password": PASSWORD,
+    }
+    path = cfgdir / "agent.json"
+    raw = path.read_text()
+    assert PASSWORD not in raw
+    assert json.loads(raw) == {
+        "base_url": "http://srv",
+        "email": "me@example.com",
+        "access_token": JWT,
+    }
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    out = capsys.readouterr()
+    logs = "\n".join(r.getMessage() for r in caplog.records)
+    for secret in (JWT, PASSWORD):
+        assert secret not in out.out + out.err + logs
+    assert "me@example.com" in out.out
+
+
+@pytest.mark.parametrize(
+    ("status", "msg"),
+    [(401, "wrong email or password"), (403, "not confirmed"), (429, "Too many")],
+)
+@respx.mock
+def test_agent_login_rejected(cfgdir, monkeypatch, capsys, status, msg):
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": PASSWORD)
+    respx.post("http://srv/auth/login").mock(return_value=httpx.Response(status, json={}))
+    assert cli.agent_main(["login", "--server", "http://srv", "--email", "a@b.c"]) == 2
+    assert msg in capsys.readouterr().err
+    assert not (cfgdir / "agent.json").exists()
+
+
+@respx.mock
+def test_agent_login_unreachable_exit_1(cfgdir, monkeypatch, capsys):
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": PASSWORD)
+    respx.post("http://srv/auth/login").mock(side_effect=httpx.ConnectError("refused"))
+    assert cli.agent_main(["login", "--server", "http://srv", "--email", "a@b.c"]) == 1
+    assert "cannot reach" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("exc", [KeyboardInterrupt, EOFError])
+def test_agent_login_ctrl_c_at_password_prompt_exits_quietly(cfgdir, monkeypatch, capsys, exc):
+    def interrupted(prompt=""):
+        raise exc
+
+    monkeypatch.setattr(cli.getpass, "getpass", interrupted)
+    assert cli.agent_main(["login", "--server", "http://srv", "--email", "a@b.c"]) == 0
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_agent_run_not_logged_in(cfgdir, capsys):
+    assert cli.agent_main(["run"]) == 3
+    assert "ha-agent login" in capsys.readouterr().err
+
+
+def test_agent_run_passes_through_relogin_exit(cfgdir, monkeypatch, capsys):
+    from ha_edge import agent
+
+    config.save_agent(config.AgentConfig("http://srv", "a@b.c", JWT))
+    seen = {}
+
+    async def fake_run_agent(cfg, **kw):
+        seen["cfg"] = cfg
+        seen["kw"] = kw
+        return agent.EXIT_RELOGIN
+
+    monkeypatch.setattr(agent, "run_agent", fake_run_agent)
+    assert cli.agent_main(["run"]) == 6
+    assert seen["cfg"].access_token == JWT
+    assert {"connect", "notifier", "alarm", "clock", "http", "stop"} <= set(seen["kw"])
+    out = capsys.readouterr()
+    assert JWT not in out.out + out.err
+    assert "ha-agent login" in out.err
+
+
+def test_agent_test_alarm_plays_3s(monkeypatch):
+    from ha_edge import notify
+
+    made = []
+
+    class FakePlayer:
+        def __init__(self, max_s=30.0, **kw):
+            self.max_s = max_s
+            self.played = self.waited = False
+            self.unavailable = False
+            made.append(self)
+
+        async def play(self):
+            self.played = True
+
+        async def wait(self):
+            self.waited = True
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(notify, "AlarmPlayer", FakePlayer)
+    assert cli.agent_main(["test-alarm"]) == 0
+    assert made[0].max_s == 3.0 and made[0].played and made[0].waited
+
+
+def test_agent_test_alarm_without_pw_play_exits_1(monkeypatch, capsys):
+    from ha_edge import notify
+
+    class Missing:
+        def __init__(self, **kw):
+            self.unavailable = False
+
+        async def play(self):
+            self.unavailable = True
+
+        async def wait(self):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(notify, "AlarmPlayer", Missing)
+    assert cli.agent_main(["test-alarm"]) == 1
+    assert "pw-play" in capsys.readouterr().err
