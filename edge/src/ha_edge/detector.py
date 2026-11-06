@@ -31,6 +31,19 @@ class Detector:
         self._needed = max((i for idx in index.values() for i in idx), default=-1) + 1
         self._last_emit: dict[str, float] = {}
 
+    def playback_matters(self, scores: np.ndarray, enabled: frozenset[str]) -> bool:
+        """True if some enabled sound scores in [threshold, boosted threshold).
+
+        Only then can "is the machine playing audio?" change the outcome, so the caller
+        can skip the playback probe for every other window.
+        """
+        scores = np.asarray(scores)
+        boosted = min(self._threshold + self._boost, MAX_THRESHOLD)
+        for sound, idxs in self._index.items():
+            if sound in enabled and self._threshold <= float(scores[idxs].max()) < boosted:
+                return True
+        return False
+
     def process(
         self, scores: np.ndarray, at: float, enabled: frozenset[str], playing: bool
     ) -> list[Detection]:

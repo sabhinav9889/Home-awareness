@@ -84,7 +84,9 @@ async def run_sensor(
             async for chunk in mic:
                 for window in windower.push(chunk):
                     scores = await asyncio.to_thread(classifier.scores, window)
-                    playing = await asyncio.to_thread(probe.playing)
+                    playing = False
+                    if detector.playback_matters(scores, enabled):
+                        playing = await asyncio.to_thread(probe.playing)
                     for d in detector.process(scores, monotonic(), enabled, playing):
                         log.info("detected %s (%.2f)", d.sound, d.confidence)
                         # Stamped after inference: lags the sound by a few ms (plus the

@@ -65,3 +65,19 @@ def test_enabling_after_disabled_emits_immediately():
     d = Detector(INDEX)
     assert d.process(sc(i0=0.9), 0.0, frozenset({"siren"}), False) == []
     assert [x.sound for x in d.process(sc(i0=0.9), 0.5, ALL, False)] == ["scream"]
+
+
+def test_playback_matters_only_between_threshold_and_boosted_threshold():
+    d = Detector(INDEX)  # 0.30, +0.20
+    assert not d.playback_matters(sc(), ALL)  # silence
+    assert not d.playback_matters(sc(i0=0.29), ALL)
+    assert d.playback_matters(sc(i0=0.30), ALL)
+    assert d.playback_matters(sc(i2=0.49), ALL)
+    assert not d.playback_matters(sc(i0=0.50), ALL)  # emitted either way
+    assert not d.playback_matters(sc(i0=0.40), frozenset({"siren"}))  # not enabled
+
+
+def test_playback_matters_uses_capped_boost():
+    d = Detector(INDEX, threshold=0.9, boost=0.2)
+    assert d.playback_matters(sc(i0=0.94), ALL)
+    assert not d.playback_matters(sc(i0=0.96), ALL)

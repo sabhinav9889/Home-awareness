@@ -361,3 +361,34 @@ async def test_heartbeat_404_points_at_the_server_url(caplog):
     errors = [r.getMessage() for r in caplog.records if "404" in r.getMessage()]
     assert len(errors) == 1  # said once, not every retry
     assert "http://server" in errors[0] and "server URL" in errors[0]
+
+
+class CountingProbe(FakeProbe):
+    def __init__(self, playing=False):
+        super().__init__(playing)
+        self.calls = 0
+
+    def playing(self):
+        self.calls += 1
+        return self._playing
+
+
+async def test_playback_probe_skipped_when_it_cannot_change_the_outcome():
+    client = FakeClient()
+    clf = FakeClassifier(value=0.0)  # silent windows
+    probe = CountingProbe()
+    task, stop = start(client, classifier=clf, probe=probe)
+    await until(lambda: clf.calls >= 10 and client.heartbeats >= 1)
+    await finish(task, stop)
+    assert probe.calls == 0
+
+
+async def test_playback_probe_consulted_for_borderline_scores():
+    client = FakeClient()
+    clf = FakeClassifier(value=0.4)  # above 0.30, below 0.50: playback decides
+    probe = CountingProbe(playing=True)
+    task, stop = start(client, classifier=clf, probe=probe)
+    await until(lambda: clf.calls >= 10 and client.heartbeats >= 1 and probe.calls >= 1)
+    await asyncio.sleep(0.02)
+    assert await finish(task, stop) == EXIT_OK
+    assert client.sent == []  # boosted threshold suppressed it
