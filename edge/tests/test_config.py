@@ -52,3 +52,8 @@ def test_corrupt_file_raises_clear_error(cfg_dir):
 def test_config_dir_default_uses_platformdirs(monkeypatch):
     monkeypatch.delenv("HA_EDGE_CONFIG_DIR")
     assert config.config_dir().name == "home-awareness"
+
+
+def test_new_config_dir_is_private(cfg_dir):
+    config.save_agent(AgentConfig("http://x", "a@b.c", "tok"))
+    assert stat.S_IMODE(os.stat(cfg_dir).st_mode) == 0o700

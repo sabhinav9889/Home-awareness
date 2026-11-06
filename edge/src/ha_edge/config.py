@@ -38,7 +38,7 @@ def config_dir() -> Path:
 
 def _save(name: str, cfg) -> Path:
     d = config_dir()
-    d.mkdir(parents=True, exist_ok=True)
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = d / name
     fd, tmp = tempfile.mkstemp(dir=d, prefix=f".{name}.", suffix=".tmp")
     try:
