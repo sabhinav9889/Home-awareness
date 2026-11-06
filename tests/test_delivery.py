@@ -494,3 +494,55 @@ async def test_slow_telegram_does_not_delay_ntfy(signed_up, session, factory, re
     }  # fmt: skip
     await session.refresh(alert)
     assert alert.status == "sent"
+
+
+async def test_outcome_finishing_during_another_commit_is_stored(
+    signed_up, session, factory, redis, published, monkeypatch
+):
+    # Telegram's result arrives while ntfy's outcome is being flushed (the UPDATE is on the
+    # wire). Every stored row must match what was actually sent.
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    member, _ = await signed_up()
+    await _prefs(session, member, telegram=True, telegram_chat_id="42", ntfy_topic="t")
+    alert = await _alert(session, member)
+    release = asyncio.Event()
+    tg_started = []
+
+    async def slow_telegram(http, token, chat_id, text):
+        tg_started.append(1)
+        await release.wait()
+
+    async def fast_ntfy(http, base, topic, text):
+        raise httpx.ConnectError("ntfy down")  # failed after 3 attempts: a distinct outcome
+
+    def mid_flush(conn, cursor, statement, params, context, executemany):
+        if tg_started and not release.is_set() and statement.startswith("UPDATE deliveries"):
+            release.set()  # telegram completes while this UPDATE awaits the database
+
+    monkeypatch.setattr(delivery.telegram, "send_message", slow_telegram)
+    monkeypatch.setattr(delivery.ntfy, "publish", fast_ntfy)
+    event.listen(Engine, "before_cursor_execute", mid_flush)
+    try:
+        await _run(alert, factory, redis)
+    finally:
+        event.remove(Engine, "before_cursor_execute", mid_flush)
+    assert release.is_set()  # the interleaving really happened
+    rows = {
+        c: (st, n, err)
+        for c, st, n, err in (
+            await session.execute(
+                select(Delivery.channel, Delivery.status, Delivery.attempts, Delivery.last_error)
+                .where(Delivery.alert_id == alert.id)
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+    }
+    assert rows == {
+        "websocket": ("sent", 1, None),
+        "telegram": ("sent", 1, None),
+        "ntfy": ("failed", 3, "ntfy down"),
+    }
+    stored_alert = await session.scalar(select(Alert.status).where(Alert.id == alert.id))
+    assert stored_alert == "partial"

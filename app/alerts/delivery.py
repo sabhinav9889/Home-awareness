@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -35,24 +36,39 @@ def _default_session_factory():
     return _sessionmaker()()
 
 
+@dataclass
+class Outcome:
+    """A channel's result as plain data. Send tasks return this and never touch ORM rows:
+    mutating a session-attached object while another task's flush is in flight can be lost."""
+
+    status: str = "pending"
+    attempts: int = 0
+    last_error: str | None = None
+
+    def apply(self, d: Delivery) -> None:
+        d.status, d.attempts, d.last_error = self.status, self.attempts, self.last_error
+
+
 async def _send_with_retries(
-    delivery: Delivery, send: Callable[[], Awaitable[None]], sleep, secrets: tuple[str, ...]
-) -> None:
+    send: Callable[[], Awaitable[object]], sleep, secrets: tuple[str, ...]
+) -> Outcome:
+    out = Outcome()
     for attempt in range(1, len(BACKOFF) + 2):
-        delivery.attempts = attempt
+        out.attempts = attempt
         try:
             await send()
         except Exception as e:
             error = str(e) or type(e).__name__
             for secret in secrets:
                 error = error.replace(secret, "***")
-            delivery.last_error = error[:MAX_ERROR]
+            out.last_error = error[:MAX_ERROR]
             if attempt <= len(BACKOFF):
                 await sleep(BACKOFF[attempt - 1])
         else:
-            delivery.status, delivery.last_error = "sent", None
-            return
-    delivery.status = "failed"
+            out.status, out.last_error = "sent", None
+            return out
+    out.status = "failed"
+    return out
 
 
 async def deliver_alert(
@@ -214,23 +230,23 @@ async def _deliver_claimed(
         DELIVERIES.labels(d.channel, d.status).inc()
 
     # External channels run concurrently, so a slow Telegram (up to ~35 s with retries)
-    # never holds back ntfy. The sends only touch their own Delivery object in memory; all
-    # session I/O stays in this task, committing each outcome as it completes.
+    # never holds back ntfy. Send tasks only return plain Outcomes; this task alone applies
+    # each to its Delivery row and commits it, one at a time, as results complete.
     secrets = (token,) if token else ()
 
-    async def attempt(d: Delivery, send: Send) -> tuple[Delivery, Exception | None]:
-        try:
-            await _send_with_retries(d, send, sleep, secrets)
-        except Exception as e:  # noqa: BLE001  re-raised below, after the others finish
-            return d, e
-        return d, None
+    async def run(i: int, send: Send) -> tuple[int, Outcome]:
+        return i, await _send_with_retries(send, sleep, secrets)
 
+    tasks = [asyncio.create_task(run(i, send)) for i, (_, send) in enumerate(external)]
     crash: Exception | None = None
-    for done in asyncio.as_completed([attempt(d, send) for d, send in external]):
-        d, error = await done
-        if error is not None:
-            crash = crash or error
+    for done in asyncio.as_completed(tasks):
+        try:
+            i, outcome = await done
+        except Exception as e:  # noqa: BLE001  re-raised below, after the others finish
+            crash = crash or e
             continue  # left pending: the abort path marks it failed
+        d = external[i][0]
+        outcome.apply(d)
         await session.commit()
         DELIVERIES.labels(d.channel, d.status).inc()
     if crash is not None:
