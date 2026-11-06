@@ -84,8 +84,9 @@ class DesktopNotifier:
         if actions and not self._hinted:
             self._hinted = True
             print(
-                "(This desktop can't show buttons: the alarm stops by itself after 30 s, "
-                "or press Ctrl-C here to stop it and exit.)",
+                "(This desktop can't show buttons: each alarm rings for up to 30 s; a new "
+                "alarm alert restarts it, for at most 3 minutes in a row. "
+                "Press Ctrl-C here to stop it and exit.)",
                 file=self._stream,
                 flush=True,
             )

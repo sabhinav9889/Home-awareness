@@ -226,7 +226,9 @@ async def test_server_without_buttons_returns_none_and_hints(capsys):
     n = DesktopNotifier(lib=lib)
     async with asyncio.timeout(1):
         assert await n.popup("t", "b", ["I'm on it", "Stop alarm"]) is None
-    assert "Ctrl-C" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "Ctrl-C" in err
+    assert "30 s" in err and "new alarm alert restarts" in err and "3 minutes" in err
 
 
 async def test_no_dbus_falls_back_to_terminal_and_logs_once(capsys, caplog):
