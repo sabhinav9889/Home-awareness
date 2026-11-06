@@ -271,3 +271,55 @@ async def test_concurrent_plays_after_stop_start_only_one_alarm():
     assert len(spawn.calls) == 2
     player.stop()
     await player.wait()
+
+
+class SlowDyingProc(FakeProc):
+    """terminate() takes effect a little later, like a real process being reaped."""
+
+    def terminate(self):
+        self.terminated = True
+        asyncio.get_running_loop().call_later(0.05, self._exit, -15)
+
+
+async def test_stop_while_play_waits_for_old_alarm_to_die_starts_nothing():
+    spawn = Spawner()
+    player = AlarmPlayer(spawn=spawn)
+
+    async def slow_spawn(*argv):
+        spawn.calls.append(argv)
+        p = SlowDyingProc()
+        spawn.procs.append(p)
+        return p
+
+    player._spawn = slow_spawn
+    await player.play()
+    player.stop()
+    restart = asyncio.create_task(player.play())  # waits for the old process to die
+    await asyncio.sleep(0.01)
+    assert not restart.done()
+    player.stop()  # the user pressed Stop while the restart was waiting
+    await restart
+    assert len(spawn.calls) == 1
+    assert not player.playing
+    await player.wait()
+
+
+async def test_stop_while_pw_play_is_starting_terminates_the_new_process():
+    release = asyncio.Event()
+    procs = []
+
+    async def gated_spawn(*argv):
+        await release.wait()
+        p = FakeProc()
+        procs.append(p)
+        return p
+
+    player = AlarmPlayer(spawn=gated_spawn)
+    starting = asyncio.create_task(player.play())
+    await asyncio.sleep(0.01)
+    player.stop()  # pressed while pw-play was still being spawned
+    release.set()
+    await starting
+    assert len(procs) == 1 and procs[0].terminated
+    assert not player.playing
+    await player.wait()

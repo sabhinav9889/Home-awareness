@@ -169,7 +169,9 @@ class AlarmPlayer:
     """Plays the alarm on the default output for at most ``max_s`` seconds.
 
     ``play()`` starts it and returns; ``stop()`` silences it at once; ``wait()`` waits for
-    it to end. A second ``play()`` while one is sounding does nothing.
+    it to end. A second ``play()`` while one is sounding does nothing. A ``stop()`` always
+    wins over a ``play()`` that started before it, even one still waiting for the previous
+    alarm to die or for ``pw-play`` to start.
     """
 
     def __init__(
@@ -185,6 +187,7 @@ class AlarmPlayer:
         self._task: asyncio.Task[None] | None = None
         self._stopping = False  # stop() called; the task is still reaping the process
         self._lock = asyncio.Lock()  # one play() at a time: never two alarms at once
+        self._gen = 0  # bumped by stop(): a play() begun before a stop() must not sound
         self.unavailable = False  # pw-play could not be started
 
     @property
@@ -210,14 +213,19 @@ class AlarmPlayer:
         )
 
     async def play(self) -> None:
+        gen = self._gen
         async with self._lock:
-            await self._play()
+            await self._play(gen)
 
-    async def _play(self) -> None:
+    async def _play(self, gen: int) -> None:
+        if gen != self._gen:
+            return  # stopped while waiting for the lock
         if self.playing:
             return
         if self._running:
             await self.wait()  # a stopped alarm finishes dying first
+            if gen != self._gen:
+                return  # stopped while the old alarm was dying
         self._stopping = False
         try:
             proc = await self._spawn(*self._argv())
@@ -229,6 +237,8 @@ class AlarmPlayer:
         self.unavailable = False
         self._proc = proc
         self._task = asyncio.create_task(self._run(proc))
+        if gen != self._gen:
+            self.stop()  # stopped while pw-play was starting: silence it; _run reaps it
 
     async def _feed(self, proc: Any) -> None:
         with contextlib.suppress(BrokenPipeError, ConnectionResetError, OSError):
@@ -266,6 +276,7 @@ class AlarmPlayer:
                 proc.terminate()
 
     def stop(self) -> None:
+        self._gen += 1
         if self._running:
             self._stopping = True
         if self._proc is not None:
