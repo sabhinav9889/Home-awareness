@@ -306,8 +306,8 @@ async def test_second_delivery_of_same_alert_sends_nothing(
 
 
 @respx.mock
-async def test_crash_after_first_channel_keeps_sent_row_and_never_resends(
-    signed_up, session, factory, redis, published
+async def test_crash_after_first_channel_marks_alert_failed_and_never_resends(
+    signed_up, session, factory, redis, published, caplog
 ):
     member, _ = await signed_up()
     await _prefs(session, member, telegram=True, telegram_chat_id="42")
@@ -317,15 +317,31 @@ async def test_crash_after_first_channel_keeps_sent_row_and_never_resends(
     async def crashing_sleep(_s):
         raise RuntimeError("worker died")
 
-    with pytest.raises(RuntimeError):
-        await _run(alert, factory, redis, crashing_sleep)
-    d = await _deliveries(session, alert.id)
+    alert_id = alert.id
+    await _run(alert, factory, redis, crashing_sleep)  # logged, not raised
+    await session.refresh(alert)  # the abort path rolled the (shared) session back
+    assert alert.status == "failed"  # never left "delivering" invisibly
+    d = await _deliveries(session, alert_id)
     assert d["websocket"].status == "sent"
-    assert d["telegram"].status == "pending"
-    await session.refresh(alert)
-    assert alert.status == "delivering"
+    assert d["telegram"].status == "failed" and d["telegram"].last_error == "delivery aborted"
+    assert f"delivery of alert {alert_id} failed" in caplog.text and "worker died" in caplog.text
     await _run(alert, factory, redis)  # redelivery: claim fails, nothing re-sent
     assert len(published) == 1
+
+
+async def test_crash_before_any_send_marks_alert_failed(
+    signed_up, session, factory, redis, published, monkeypatch
+):
+    member, _ = await signed_up()
+    alert = await _alert(session, member)
+
+    def boom(_key):
+        raise KeyError("catalog broke")
+
+    monkeypatch.setattr(delivery, "get_sound", boom)
+    await _run(alert, factory, redis)
+    await session.refresh(alert)
+    assert alert.status == "failed" and published == []
 
 
 async def test_alerts_list_only_own(client, signed_up, session):

@@ -23,6 +23,7 @@ TEST_TEXT = "🔔 Test alert from Home Awareness — your alerts work."
 BACKOFF = (1, 4)  # seconds slept after attempt 1 and 2; 3 attempts in total
 MAX_ERROR = 500
 NO_LISTENER = "no live listener"
+ABORTED = "delivery aborted"
 log = logging.getLogger(__name__)
 # An alert this old is dropped, not sent: an hour-late "scream" alarm is worse than none.
 MAX_ALERT_AGE = timedelta(minutes=10)
@@ -91,94 +92,127 @@ async def deliver_alert(
         await session.commit()
         if claimed is None:
             return
-        alert = await session.get(Alert, alert_id)
-        if clock() - alert.created_at > MAX_ALERT_AGE:
-            alert.status = "failed"  # stale (queue backlog, worker down): send nothing
-            await session.commit()
-            log.warning("alert %s dropped: older than %s", alert_id, MAX_ALERT_AGE)
-            return
-        tenant = Tenant.for_household(alert.household_id, session)
-        prefs = await session.scalar(
-            tenant.select(AlertPreference).where(AlertPreference.member_id == alert.member_id)
+        try:
+            await _deliver_claimed(session, alert_id, redis, http, sleep, clock, settings)
+        except Exception:  # noqa: BLE001  never leave a claimed alert "delivering" invisibly
+            log.error("delivery of alert %s failed", alert_id, exc_info=True)
+            await _abort(session, alert_id)
+
+
+async def _abort(session: Any, alert_id: int) -> None:
+    """After an unexpected error: anything not yet sent is failed, and so is the alert."""
+    try:
+        await session.rollback()
+        await session.execute(
+            update(Delivery)
+            .where(Delivery.alert_id == alert_id, Delivery.status == "pending")
+            .values(status="failed", last_error=ABORTED)
         )
-        popup, alarm = (prefs.popup, prefs.alarm) if prefs else (True, False)
-        chat_id = prefs.telegram_chat_id if prefs and prefs.telegram else None
-        topic = prefs.ntfy_topic if prefs else None
-
-        device_name = "a removed sensor"
-        if alert.event_id is not None:
-            event = await session.scalar(tenant.select(Event).where(Event.id == alert.event_id))
-            if event is not None and event.device_id is not None:
-                device = await session.scalar(
-                    tenant.select(Device).where(Device.id == event.device_id)
-                )
-                device_name = device.name if device else device_name
-        at = alert.created_at.astimezone(UTC)
-        if alert.event_id is None:
-            label, text = "Test alert", TEST_TEXT
-        else:
-            label = get_sound(alert.sound_key).label
-            text = f"⚠️ {label} detected by {device_name} at {at:%H:%M} UTC — Home Awareness"
-
-        Send = Callable[[], Awaitable[object]]
-        plan: list[tuple[Delivery, Send | None]] = []  # None: nothing to send (pre-failed)
-
-        def new(channel: str, send: Send | None) -> None:
-            d = Delivery(alert_id=alert.id, channel=channel, status="pending", attempts=0)
-            session.add(d)
-            plan.append((d, send))
-
-        token = settings.telegram_bot_token
-        if popup or alarm:
-            new(
-                "websocket",
-                lambda: publish_to_member(
-                    redis,
-                    alert.member_id,
-                    {
-                        "kind": "alert",
-                        "alert_id": alert.id,
-                        "sound_key": alert.sound_key,
-                        "label": label,
-                        "device_name": device_name,
-                        "at": at.isoformat(),
-                        "popup": popup,
-                        "alarm": alarm,
-                    },
-                ),
-            )
-        if chat_id:
-            new(
-                "telegram",
-                (lambda: telegram.send_message(http, token, chat_id, text)) if token else None,
-            )
-        if topic:
-            new("ntfy", lambda: ntfy.publish(http, settings.ntfy_base_url, topic, text))
-        await session.commit()  # every Delivery row exists (pending) before anything is sent
-
-        for d, send in plan:
-            if send is None:
-                d.status, d.last_error = "failed", "telegram bot token not configured"
-            elif d.channel == "websocket":
-                # No retries. "sent" means at least one live dashboard received it: a popup or
-                # alarm nobody is listening for reached no one, so it must not count as sent.
-                d.attempts = 1
-                try:
-                    listeners = await send()
-                    if listeners:
-                        d.status = "sent"
-                    else:
-                        d.status, d.last_error = "failed", NO_LISTENER
-                except Exception as e:
-                    d.status, d.last_error = "failed", (str(e) or type(e).__name__)[:MAX_ERROR]
-            else:
-                await _send_with_retries(d, send, sleep, (token,) if token else ())
-            await session.commit()  # persist each channel's outcome before the next send
-            DELIVERIES.labels(d.channel, d.status).inc()
-
-        ok = sum(d.status == "sent" for d, _ in plan)
-        if ok == 0:
-            alert.status = "failed"  # includes "no channel enabled": nothing reached anyone
-        else:
-            alert.status = "sent" if ok == len(plan) else "partial"
+        await session.execute(
+            update(Alert)
+            .where(Alert.id == alert_id, Alert.status == "delivering")
+            .values(status="failed")
+        )
         await session.commit()
+    except Exception:  # noqa: BLE001
+        log.error("could not mark alert %s failed", alert_id, exc_info=True)
+
+
+async def _deliver_claimed(
+    session: Any,
+    alert_id: int,
+    redis: Redis,
+    http: httpx.AsyncClient,
+    sleep: Callable[[float], Awaitable[None]],
+    clock: Callable[[], datetime],
+    settings: Any,
+) -> None:
+    alert = await session.get(Alert, alert_id)
+    if clock() - alert.created_at > MAX_ALERT_AGE:
+        alert.status = "failed"  # stale (queue backlog, worker down): send nothing
+        await session.commit()
+        log.warning("alert %s dropped: older than %s", alert_id, MAX_ALERT_AGE)
+        return
+    tenant = Tenant.for_household(alert.household_id, session)
+    prefs = await session.scalar(
+        tenant.select(AlertPreference).where(AlertPreference.member_id == alert.member_id)
+    )
+    popup, alarm = (prefs.popup, prefs.alarm) if prefs else (True, False)
+    chat_id = prefs.telegram_chat_id if prefs and prefs.telegram else None
+    topic = prefs.ntfy_topic if prefs else None
+
+    device_name = "a removed sensor"
+    if alert.event_id is not None:
+        event = await session.scalar(tenant.select(Event).where(Event.id == alert.event_id))
+        if event is not None and event.device_id is not None:
+            device = await session.scalar(tenant.select(Device).where(Device.id == event.device_id))
+            device_name = device.name if device else device_name
+    at = alert.created_at.astimezone(UTC)
+    if alert.event_id is None:
+        label, text = "Test alert", TEST_TEXT
+    else:
+        label = get_sound(alert.sound_key).label
+        text = f"⚠️ {label} detected by {device_name} at {at:%H:%M} UTC — Home Awareness"
+
+    Send = Callable[[], Awaitable[object]]
+    plan: list[tuple[Delivery, Send | None]] = []  # None: nothing to send (pre-failed)
+
+    def new(channel: str, send: Send | None) -> None:
+        d = Delivery(alert_id=alert.id, channel=channel, status="pending", attempts=0)
+        session.add(d)
+        plan.append((d, send))
+
+    token = settings.telegram_bot_token
+    if popup or alarm:
+        new(
+            "websocket",
+            lambda: publish_to_member(
+                redis,
+                alert.member_id,
+                {
+                    "kind": "alert",
+                    "alert_id": alert.id,
+                    "sound_key": alert.sound_key,
+                    "label": label,
+                    "device_name": device_name,
+                    "at": at.isoformat(),
+                    "popup": popup,
+                    "alarm": alarm,
+                },
+            ),
+        )
+    if chat_id:
+        new(
+            "telegram",
+            (lambda: telegram.send_message(http, token, chat_id, text)) if token else None,
+        )
+    if topic:
+        new("ntfy", lambda: ntfy.publish(http, settings.ntfy_base_url, topic, text))
+    await session.commit()  # every Delivery row exists (pending) before anything is sent
+
+    for d, send in plan:
+        if send is None:
+            d.status, d.last_error = "failed", "telegram bot token not configured"
+        elif d.channel == "websocket":
+            # No retries. "sent" means at least one live dashboard received it: a popup or
+            # alarm nobody is listening for reached no one, so it must not count as sent.
+            d.attempts = 1
+            try:
+                listeners = await send()
+                if listeners:
+                    d.status = "sent"
+                else:
+                    d.status, d.last_error = "failed", NO_LISTENER
+            except Exception as e:
+                d.status, d.last_error = "failed", (str(e) or type(e).__name__)[:MAX_ERROR]
+        else:
+            await _send_with_retries(d, send, sleep, (token,) if token else ())
+        await session.commit()  # persist each channel's outcome before the next send
+        DELIVERIES.labels(d.channel, d.status).inc()
+
+    ok = sum(d.status == "sent" for d, _ in plan)
+    if ok == 0:
+        alert.status = "failed"  # includes "no channel enabled": nothing reached anyone
+    else:
+        alert.status = "sent" if ok == len(plan) else "partial"
+    await session.commit()
