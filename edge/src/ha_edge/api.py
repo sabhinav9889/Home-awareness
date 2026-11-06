@@ -12,6 +12,7 @@ from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from types import MappingProxyType
 
 import httpx
 
@@ -64,12 +65,27 @@ class DeviceConfig:
     # case the detector's global default applies.
     thresholds: Mapping[str, float] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:  # read-only copy: the config is shared across tasks
+        object.__setattr__(self, "thresholds", MappingProxyType(dict(self.thresholds)))
+
 
 @dataclass(frozen=True)
 class EventResult:
     event_id: int
     merged: bool
     alerts: int
+
+
+def _thresholds(raw: Mapping[str, object]) -> dict[str, float]:
+    """Per-sound thresholds; a value that isn't a number drops only that sound (the
+    detector's global default applies to it). A non-mapping is a malformed response."""
+    out: dict[str, float] = {}
+    for key, value in raw.items():
+        try:
+            out[str(key)] = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def _detail(resp: httpx.Response) -> str:
@@ -154,7 +170,7 @@ class ServerClient:
             raise _rejected(resp)
         try:
             data = resp.json()
-            thresholds = {str(k): float(v) for k, v in data.get("thresholds", {}).items()}
+            thresholds = _thresholds(data.get("thresholds", {}))
             return DeviceConfig(
                 frozenset(data["enabled_sounds"]), int(data["heartbeat_interval_s"]), thresholds
             )

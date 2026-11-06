@@ -35,6 +35,7 @@ EXIT_REVOKED = 5
 FIRST_HEARTBEAT_RETRY_S = 5.0
 DRAIN_INTERVAL_S = 1.0
 MAX_BACKOFF_S = 30.0
+FINAL_DRAIN_S = 3.0  # on exit, how long to try sending a last held detection
 REVOKED_MESSAGE = "This sensor was removed. Pair it again with `ha-sensor pair`."
 
 
@@ -174,4 +175,16 @@ async def run_sensor(
     except* MicLost as eg:  # raised while opening the stream
         log.error("Microphone lost: %s. Stopping.", eg.exceptions[0])
         code = code or EXIT_MIC_LOST
+    # A detection held for one more window when the stream ended or we were stopped.
+    held = detector.flush()
+    for d in held:
+        log.info("detected %s (%.2f)", d.sound, d.confidence)
+        queue.put(d.sound, d.confidence, now())
+    if held and code != EXIT_REVOKED:
+        # Best effort, bounded: the queue is memory-only and gone once we return.
+        try:
+            async with asyncio.timeout(FINAL_DRAIN_S):
+                await queue.drain(client, now(), allow=lambda sound: sound in enabled)
+        except Exception as e:  # noqa: BLE001  (nothing left to retry with)
+            log.warning("could not send the last detection before exiting (%s)", type(e).__name__)
     return code

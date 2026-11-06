@@ -81,6 +81,31 @@ async def test_heartbeat_from_old_server_without_thresholds(client):
 
 
 @respx.mock
+async def test_heartbeat_bad_threshold_value_drops_only_that_key(client):
+    respx.post(f"{BASE}/device/heartbeat").respond(
+        200,
+        json={
+            "enabled_sounds": ["siren", "crying"],
+            "heartbeat_interval_s": 60,
+            "thresholds": {"siren": "loud", "crying": 0.5, "dog_barking": None},
+        },
+    )
+    cfg = await client.heartbeat()
+    assert cfg.enabled_sounds == frozenset({"siren", "crying"})
+    assert dict(cfg.thresholds) == {"crying": 0.5}
+
+
+def test_device_config_thresholds_are_read_only():
+    src = {"siren": 0.5}
+    cfg = DeviceConfig(frozenset({"siren"}), 60, src)
+    with pytest.raises(TypeError):
+        cfg.thresholds["siren"] = 0.1  # type: ignore[index]
+    src["siren"] = 0.1  # the caller's dict was copied
+    assert cfg.thresholds["siren"] == 0.5
+    assert DeviceConfig(frozenset(), 60).thresholds == {}
+
+
+@respx.mock
 async def test_heartbeat_malformed_thresholds_raises_server_unavailable(client):
     respx.post(f"{BASE}/device/heartbeat").respond(
         200, json={"enabled_sounds": [], "heartbeat_interval_s": 60, "thresholds": ["x"]}

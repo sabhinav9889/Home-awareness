@@ -101,6 +101,7 @@ def detections_from_scores(
     found: set[str] = set()
     for i, s in enumerate(scores):
         found.update(d.sound for d in detector.process(s, i * hop_s, enabled, playing=False))
+    found.update(d.sound for d in detector.flush())  # held through the clip's last window
     return found
 
 

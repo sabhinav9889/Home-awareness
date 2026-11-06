@@ -59,12 +59,16 @@ What to know:
   the lowest any household member set for that sound (defaults from measured accuracy:
   0.50 for siren, coughing, dog barking and crying, 0.30 for the rest). A server too old to
   send thresholds means 0.30 for every sound.
+- **A detection is reported about 0.5 s after it is first heard.** The sensor waits one
+  more listening window and reports the louder of the two, so a sound's quiet onset
+  doesn't hide its peak from members with a stricter threshold. A detection still
+  waiting when the sensor stops is sent before it exits (best effort, up to 3 s).
 - **Audio playing through the speakers raises the detection threshold** (by 0.20 per
   sound, e.g. 0.30 to 0.50, capped at 0.95), so a film is less likely to trigger alerts.
   This also makes real sounds slightly harder to catch while something plays, and it
-  isn't perfect: loud media can still trigger. Playback through **headphones** doesn't count (the mic can't hear it).
-  Only the **default output** is considered: audio sent to another output device is
-  treated as not playing.
+  isn't perfect: loud media can still trigger. Playback through **headphones** doesn't
+  count (the mic can't hear it). Only the **default output** is considered: audio sent
+  to another output device is treated as not playing.
 - Events the server rejects are dropped with a logged reason (at most once per reason per
   10 minutes). If the laptop's clock is more than 10 minutes off, every event is rejected:
   fix the system time. A wrong `--server` shows up as an HTTP 404.

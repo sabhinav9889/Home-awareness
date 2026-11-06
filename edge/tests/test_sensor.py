@@ -434,3 +434,26 @@ async def test_playback_probe_skipped_below_per_sound_threshold():
     assert clf.calls > before
     assert await finish(task, stop) == EXIT_OK
     assert probe.calls == 0
+
+
+async def test_held_candidate_sent_when_stream_ends():
+    """One window crosses the threshold, then the mic is lost: the detector was holding it
+    for one more window that never comes. It is flushed and sent before exiting."""
+    client = FakeClient()
+    mic = FakeMic(chunks=1, then=MicLost("unplugged"), gap=0.05)  # heartbeat lands first
+    task, _stop = start(client, mic=mic)
+    async with asyncio.timeout(2):
+        assert await task == EXIT_MIC_LOST
+    assert [s for s, _, _ in client.sent] == ["doorbell"]
+
+
+async def test_held_candidate_sent_on_stop():
+    client = FakeClient()
+    clf = FakeClassifier()
+    mic = FakeMic(chunks=1, gap=0.05)  # one window, then the stream stays open and silent
+    task, stop = start(client, mic=mic, classifier=clf)
+    await until(lambda: clf.calls >= 1)
+    await asyncio.sleep(0.02)
+    assert client.sent == []  # still held: no second window yet
+    assert await finish(task, stop) == EXIT_OK
+    assert [s for s, _, _ in client.sent] == ["doorbell"]
