@@ -92,7 +92,7 @@ def test_resolve_exact_then_substring():
     assert resolve_device("mic", devs2).index == 1
 
 
-def test_resolve_none_uses_system_default():
+def test_resolve_none_uses_system_default_else_not_found():
     devs = [dev(1, "a"), dev(2, "b", is_default=True)]
     assert resolve_device(None, devs).index == 2
     with pytest.raises(MicNotFound):
@@ -191,6 +191,8 @@ async def test_stream_yields_float32_and_handles_partial_frames():
             "pw-record",
             "--target",
             BUILTIN,
+            "-P",
+            "{ node.dont-fallback=true node.dont-reconnect=true node.dont-move=true }",
             "--rate",
             "16000",
             "--channels",
@@ -234,3 +236,103 @@ async def test_stream_terminates_subprocess_on_cancel_and_close():
     await ms.aclose()
     assert proc.terminated
     await ms.aclose()  # idempotent
+
+
+def test_resolve_rejects_blank_names():
+    devs = [dev(1, "a", is_default=True)]  # a lone device must not match ""
+    for blank in ("", "   "):
+        with pytest.raises(MicNotFound):
+            resolve_device(blank, devs)
+
+
+async def test_watchdog_raises_mic_lost_when_audio_stalls():
+    class Stall(FakeStream):
+        async def read(self, n):
+            if self._chunks:
+                return self._chunks.pop(0)
+            await asyncio.sleep(3600)
+
+    proc = FakeProc([])
+    proc.stdout = Stall([np.zeros(4, "<f4").tobytes()])
+    ms = MicStream(dev(5, BUILTIN), spawn=spawner(proc, []), no_audio_timeout=0.05)
+    await ms.__aenter__()
+    await ms.__anext__()
+    with pytest.raises(MicLost, match="no audio for"):
+        await ms.__anext__()
+    assert proc.terminated
+
+
+async def test_large_stderr_does_not_block_stdout_and_tail_is_last_bytes():
+    class BigErr(FakeStream):
+        async def read(self, n):
+            if self._chunks:
+                return self._chunks.pop(0)
+            return b""
+
+    proc = FakeProc([])
+    proc.stderr = BigErr([b"x" * 100_000, b"THE-END"])
+    proc.stdout = FakeStream([np.zeros(2, "<f4").tobytes()])
+    ms = MicStream(dev(5, BUILTIN), spawn=spawner(proc, []))
+    await ms.__aenter__()
+    assert len(await asyncio.wait_for(ms.__anext__(), 1)) == 2
+    with pytest.raises(MicLost) as ei:
+        await asyncio.wait_for(ms.__anext__(), 1)
+    assert str(ei.value).endswith("THE-END")
+    assert len(str(ei.value)) < 3000
+    await ms.aclose()
+
+
+async def test_anext_after_aclose_stops_without_respawn():
+    proc = FakeProc([np.zeros(2, "<f4").tobytes()])
+    calls = []
+    ms = MicStream(dev(5, BUILTIN), spawn=spawner(proc, calls))
+    await ms.__aenter__()
+    await ms.aclose()
+    with pytest.raises(StopAsyncIteration):
+        await ms.__anext__()
+    assert len(calls) == 1
+
+
+async def test_aclose_kills_if_terminate_is_ignored_even_when_cancelled():
+    class Stubborn(FakeProc):
+        def terminate(self):
+            self.terminated = True  # ignores it
+
+        async def wait(self):
+            if not self.killed:
+                await asyncio.sleep(3600)
+            return -9
+
+    proc = Stubborn([])
+    ms = MicStream(dev(5, BUILTIN), spawn=spawner(proc, []), kill_after=0.5)
+    await ms.__aenter__()
+    task = asyncio.create_task(ms.aclose())
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert proc.terminated and proc.killed
+
+
+async def test_missing_binary_raises_mic_lost():
+    async def spawn(*argv, **kwargs):
+        raise FileNotFoundError("pw-record")
+
+    with pytest.raises(MicLost, match="pw-record"):
+        async with MicStream(dev(5, BUILTIN), spawn=spawn):
+            pass
+
+
+async def test_spawn_kwargs_stdin_devnull_stderr_pipe():
+    seen = {}
+
+    async def spawn(*argv, **kwargs):
+        seen.update(kwargs)
+        return FakeProc([])
+
+    ms = MicStream(dev(5, BUILTIN), spawn=spawn)
+    await ms.__aenter__()
+    await ms.aclose()
+    assert seen["stdin"] == asyncio.subprocess.DEVNULL
+    assert seen["stderr"] == asyncio.subprocess.PIPE
+    assert seen["stdout"] == asyncio.subprocess.PIPE

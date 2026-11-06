@@ -7,6 +7,7 @@ we never fall back to a different input.
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import json
 import subprocess
@@ -79,6 +80,8 @@ def list_inputs(run: Callable = subprocess.run) -> list[InputDevice]:
 
 def resolve_device(name: str | None, devices: list[InputDevice]) -> InputDevice:
     available = [d.name for d in devices]
+    if name is not None and not name.strip():
+        raise MicNotFound(name, available)
     if name is None:
         for d in devices:
             if d.is_default:
@@ -120,28 +123,58 @@ def resample_linear(x: np.ndarray, src_rate: float, dst_rate: float) -> np.ndarr
     return np.interp(pos, np.arange(len(x)), x).astype(np.float32)
 
 
+PIPEWIRE_PINNING = "{ node.dont-fallback=true node.dont-reconnect=true node.dont-move=true }"
+STDERR_KEEP = 2048
+
+
 class MicStream:
     """Async iterator of 16 kHz mono float32 chunks from one pinned device.
 
-    PipeWire (pw-record) does the resampling. Raises MicLost if the process
-    exits or its stdout ends; never starts a different device.
+    PipeWire (pw-record) does the resampling. The stream properties stop PipeWire
+    from moving/reconnecting it to another device, so unplugging ends the process.
+    Raises MicLost if the process exits, stdout ends, or no audio arrives for
+    `no_audio_timeout` seconds; never starts a different device.
     """
 
-    def __init__(self, device: InputDevice, *, spawn=asyncio.create_subprocess_exec):
+    def __init__(
+        self,
+        device: InputDevice,
+        *,
+        spawn=asyncio.create_subprocess_exec,
+        no_audio_timeout: float = 3.0,
+        kill_after: float = 2.0,
+    ):
         self.device = device
         self._spawn = spawn
+        self._no_audio_timeout = no_audio_timeout
+        self._kill_after = kill_after
         self._proc = None
         self._rest = b""
+        self._closed = False
+        self._stderr = collections.deque(maxlen=STDERR_KEEP)
+        self._drain_task: asyncio.Task | None = None
 
     async def __aenter__(self) -> Self:
-        self._proc = await self._spawn(
-            "pw-record", "--target", self.device.name, "--rate", str(SAMPLE_RATE),
-            "--channels", "1", "--format", "f32", "-",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.DEVNULL,
-        )  # fmt: skip
+        try:
+            self._proc = await self._spawn(
+                "pw-record", "--target", self.device.name,
+                "-P", PIPEWIRE_PINNING,
+                "--rate", str(SAMPLE_RATE), "--channels", "1", "--format", "f32", "-",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL,
+            )  # fmt: skip
+        except OSError as exc:
+            raise MicLost(f"cannot start pw-record: {exc}") from exc
+        self._drain_task = asyncio.create_task(self._drain_stderr(self._proc.stderr))
         return self
+
+    async def _drain_stderr(self, stream) -> None:
+        try:
+            while data := await stream.read(4096):
+                self._stderr.extend(data)
+        except (OSError, ValueError):
+            pass
 
     async def __aexit__(self, *exc) -> None:
         await self.aclose()
@@ -150,17 +183,26 @@ class MicStream:
         return self
 
     async def __anext__(self) -> np.ndarray:
+        if self._closed:
+            raise StopAsyncIteration
         if self._proc is None:
             await self.__aenter__()
         while True:
             try:
-                data = await self._proc.stdout.read(READ_BYTES)
+                data = await asyncio.wait_for(
+                    self._proc.stdout.read(READ_BYTES), self._no_audio_timeout
+                )
+            except TimeoutError:
+                await self.aclose()
+                raise MicLost(f"no audio for {self._no_audio_timeout:g} s") from None
             except (OSError, ValueError) as exc:
+                await self.aclose()
                 raise MicLost(f"microphone read failed: {exc}") from exc
             if not data:
-                raise MicLost(
-                    f"microphone {self.device.name!r} stopped: {await self._stderr_tail()}"
-                )
+                await asyncio.sleep(0)  # let the stderr drain see EOF
+                tail = await self._stderr_tail()
+                await self.aclose()
+                raise MicLost(f"microphone {self.device.name!r} stopped: {tail}")
             data = self._rest + data
             usable = len(data) - len(data) % 4
             self._rest = data[usable:]
@@ -168,21 +210,29 @@ class MicStream:
                 return np.frombuffer(data[:usable], dtype="<f4").astype(np.float32)
 
     async def _stderr_tail(self) -> str:
-        try:
-            raw = await asyncio.wait_for(self._proc.stderr.read(2000), timeout=1)
-        except (OSError, ValueError, TimeoutError):
-            return ""
-        return raw.decode(errors="replace").strip()[-300:]
+        task = self._drain_task
+        if task is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(asyncio.shield(task), timeout=0.5)
+        return bytes(self._stderr).decode(errors="replace").strip()
 
     async def aclose(self) -> None:
+        self._closed = True
         proc, self._proc = self._proc, None
+        task, self._drain_task = self._drain_task, None
+        if task is not None:
+            task.cancel()
         if proc is None or proc.returncode is not None:
             return
-        with contextlib.suppress(ProcessLookupError):
-            proc.terminate()
         try:
-            await asyncio.wait_for(proc.wait(), timeout=2)
-        except TimeoutError:
             with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            await proc.wait()
+                proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=self._kill_after)
+        except TimeoutError:
+            pass
+        finally:
+            if proc.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(proc.wait(), timeout=self._kill_after)
