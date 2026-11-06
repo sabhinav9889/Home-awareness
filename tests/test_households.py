@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from app.auth.models import EmailToken, Member
 from app.households.models import Household, Invite
@@ -76,7 +76,8 @@ async def test_invite_signup_joins_existing_household_as_member(client, signed_u
     ).scalar_one()
     assert member.role == "member"
     assert member.household_id == owner.household_id
-    assert (await session.scalar(select(Household.id).where(Household.name == "Home"))) is not None
+    count = await session.scalar(select(func.count()).select_from(Household))
+    assert count == 1
     me = (await client.get("/households/me", headers=headers)).json()
     assert {m["email"]: m["role"] for m in me["members"]} == {
         "owner@example.com": "owner",
