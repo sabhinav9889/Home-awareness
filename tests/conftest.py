@@ -140,3 +140,13 @@ def jobs():
     app_main.app.dependency_overrides[get_job_runner] = lambda: runner
     yield runner
     app_main.app.dependency_overrides.pop(get_job_runner, None)
+
+
+FROZEN_RATELIMIT_NOW = 1_800_000_015.0
+
+
+@pytest.fixture
+def frozen_ratelimit_clock(monkeypatch):
+    """Pin the rate limiter to one window so limit tests never straddle a boundary."""
+    monkeypatch.setattr("app.ratelimit.now", lambda: FROZEN_RATELIMIT_NOW)
+    return FROZEN_RATELIMIT_NOW

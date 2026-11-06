@@ -17,9 +17,7 @@ LINKED = "✅ Linked. You'll get Home Awareness alerts here."
 EXPIRED = "Link expired. Create a new one in the dashboard."
 
 
-@pytest.fixture(autouse=True)
-def frozen_clock(monkeypatch):
-    monkeypatch.setattr("app.ratelimit.time.time", lambda: 1_800_000_000.0)
+pytestmark = pytest.mark.usefixtures("frozen_ratelimit_clock")
 
 
 @pytest.fixture(autouse=True)

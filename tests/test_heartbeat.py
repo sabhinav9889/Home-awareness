@@ -10,9 +10,7 @@ from tests.test_devices import _pair
 DEFAULT_ON = ["glass_breaking", "scream", "smoke_alarm"]
 
 
-@pytest.fixture(autouse=True)
-def frozen_clock(monkeypatch):
-    monkeypatch.setattr("app.ratelimit.time.time", lambda: 1_800_000_000.0)
+pytestmark = pytest.mark.usefixtures("frozen_ratelimit_clock")
 
 
 async def _device(client, headers, **kw):

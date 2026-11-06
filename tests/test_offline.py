@@ -96,12 +96,11 @@ async def test_offline_notifies_household_live_and_channels(
 
 
 async def test_heartbeat_after_offline_marks_online_and_publishes_device_online(
-    client, signed_up, session, redis, monkeypatch
+    client, signed_up, session, redis, monkeypatch, frozen_ratelimit_clock
 ):
     import app.devices.router as devices_router
     from tests.test_devices import _pair
 
-    monkeypatch.setattr("app.ratelimit.time.time", lambda: 1_800_000_000.0)
     _, h = await signed_up()
     paired = await _pair(client, h, name="Hall")
     dk = {"X-Device-Key": paired["device_key"]}

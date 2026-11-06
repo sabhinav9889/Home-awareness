@@ -61,7 +61,7 @@ async def test_pairing_code_single_use_expiry_and_case_insensitive(client, signe
     assert (await client.post("/device/pair", json={"code": "ZZZZZZZZ"})).json() == r.json()
 
 
-async def test_wrong_code_rate_limited(client):
+async def test_wrong_code_rate_limited(client, frozen_ratelimit_clock):
     for _ in range(10):
         assert (await client.post("/device/pair", json={"code": "AAAAAAAA"})).status_code == 400
     assert (await client.post("/device/pair", json={"code": "AAAAAAAA"})).status_code == 429

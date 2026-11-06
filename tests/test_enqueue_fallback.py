@@ -19,7 +19,7 @@ class BrokenRunner:
 
 
 @pytest.fixture
-def broken(monkeypatch, session):
+def broken(monkeypatch, session, frozen_ratelimit_clock):
     from app.alerts.jobs import get_job_runner
     from app.main import app
 
@@ -32,7 +32,6 @@ def broken(monkeypatch, session):
         await session.execute(update(Alert).where(Alert.id == alert_id).values(status="sent"))
 
     monkeypatch.setattr(jobs, "deliver_alert", fake_deliver)
-    monkeypatch.setattr("app.ratelimit.time.time", lambda: 1_800_000_000.0)
     return runner, delivered
 
 

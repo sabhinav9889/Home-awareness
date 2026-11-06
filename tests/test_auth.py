@@ -66,8 +66,7 @@ async def test_confirm_token_single_use_and_expiry(client, session, outbox):
     assert (await client.post("/auth/confirm", json={"token": token2})).status_code == 400
 
 
-async def test_wrong_password_401_and_rate_limited(client, outbox, monkeypatch):
-    monkeypatch.setattr("app.ratelimit.time.time", lambda: 1_800_000_000.0)
+async def test_wrong_password_401_and_rate_limited(client, outbox, frozen_ratelimit_clock):
     await _signup(client)
     body = {"email": "a@x.com", "password": "wrong-password-1"}
     for _ in range(10):

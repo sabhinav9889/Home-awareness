@@ -20,9 +20,7 @@ TG_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 TEST_TEXT = "🔔 Test alert from Home Awareness — your alerts work."
 
 
-@pytest.fixture(autouse=True)
-def frozen_clock(monkeypatch):
-    monkeypatch.setattr("app.ratelimit.time.time", lambda: 1_800_000_000.0)
+pytestmark = pytest.mark.usefixtures("frozen_ratelimit_clock")
 
 
 @pytest.fixture(autouse=True)

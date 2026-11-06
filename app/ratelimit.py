@@ -9,6 +9,11 @@ from app.redis import get_redis
 from app.security import InvalidToken, decode_access_token, hash_token
 
 
+def now() -> float:
+    """The limiter's clock (tests freeze this, never the global time.time)."""
+    return time.time()
+
+
 def by_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
@@ -32,7 +37,7 @@ def rate_limit(
     scope: str, limit: int, per_seconds: int, key: Callable[[Request], str]
 ) -> Callable[..., Awaitable[None]]:
     async def dependency(request: Request, redis: Annotated[Redis, Depends(get_redis)]) -> None:
-        window = int(time.time()) // per_seconds
+        window = int(now()) // per_seconds
         name = f"rl:{scope}:{key(request)}:{window}"
         # One round trip; the key is per-window, so refreshing its TTL every call is harmless.
         async with redis.pipeline(transaction=True) as pipe:
