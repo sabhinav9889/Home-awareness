@@ -87,3 +87,51 @@ async def test_me_requires_valid_token(client, signed_up):
     }
     bad = {"Authorization": headers["Authorization"][:-2] + "xx"}
     assert (await client.get("/auth/me", headers=bad)).status_code == 401
+
+
+async def test_resend_confirmation_issues_fresh_token_and_retires_old(client, outbox):
+    await _signup(client)
+    old = _token(outbox)
+    r = await client.post("/auth/confirm/resend", json={"email": " A@x.com "})
+    assert r.status_code == 202
+    assert len(outbox) == 2 and outbox[1].to == "a@x.com"
+    new = _token(outbox, 1)
+    assert new != old
+    assert (await client.post("/auth/confirm", json={"token": old})).status_code == 400
+    assert (await client.post("/auth/confirm", json={"token": new})).status_code == 204
+
+
+async def test_resend_is_uniform_for_unknown_and_confirmed(client, outbox):
+    await _signup(client)
+    await client.post("/auth/confirm", json={"token": _token(outbox)})
+    sent = len(outbox)
+    for email in ("a@x.com", "nobody@x.com"):
+        r = await client.post("/auth/confirm/resend", json={"email": email})
+        assert r.status_code == 202
+        assert r.json() == {"detail": "if the address awaits confirmation, an email was sent"}
+    assert len(outbox) == sent
+
+
+async def test_resend_rate_limited_per_ip(client, outbox, frozen_ratelimit_clock):
+    for _ in range(10):
+        r = await client.post("/auth/confirm/resend", json={"email": "n@x.com"})
+        assert r.status_code == 202
+    r = await client.post("/auth/confirm/resend", json={"email": "n@x.com"})
+    assert r.status_code == 429
+
+
+async def test_signup_survives_failing_email_and_resend_recovers(client, outbox, caplog):
+    import app.main as app_main
+    from app.email import get_email_sender
+
+    class Broken:
+        async def send(self, to, subject, body):
+            raise ConnectionError("smtp down")
+
+    app_main.app.dependency_overrides[get_email_sender] = lambda: Broken()
+    r = await _signup(client)
+    assert r.status_code == 201
+    assert "confirmation email" in caplog.text and "smtp down" in caplog.text
+    app_main.app.dependency_overrides[get_email_sender] = lambda: outbox
+    assert (await client.post("/auth/confirm/resend", json={"email": "a@x.com"})).status_code == 202
+    assert (await client.post("/auth/confirm", json={"token": _token(outbox)})).status_code == 204

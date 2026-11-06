@@ -54,6 +54,15 @@ class MeOut(BaseModel):
     household_id: int
 
 
+class ConfirmResendIn(BaseModel):
+    email: str = Field(max_length=320)
+
+    @field_validator("email")
+    @classmethod
+    def _lower(cls, v: str) -> str:
+        return v.strip().lower()
+
+
 class ResetRequestIn(BaseModel):
     email: str
 

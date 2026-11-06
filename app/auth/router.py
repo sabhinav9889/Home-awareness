@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -10,6 +11,7 @@ from app.auth.deps import current_member
 from app.auth.models import EmailToken, Member
 from app.auth.schemas import (
     ConfirmIn,
+    ConfirmResendIn,
     LoginIn,
     MeOut,
     ResetConfirmIn,
@@ -40,6 +42,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 _signup_limit = rate_limit("signup", 10, 60, by_ip)
 _login_limit = rate_limit("login", 10, 60, by_ip)
 _reset_limit = rate_limit("password-reset", 10, 60, by_ip)
+_resend_limit = rate_limit("confirm-resend", 10, 60, by_ip)
+log = logging.getLogger(__name__)
 # Hash verified against when the email is unknown, to even out login timing.
 _DUMMY_HASH = hash_password("dummy-password-for-timing")
 
@@ -93,23 +97,71 @@ async def signup(
         await session.rollback()
         raise HTTPException(status_code=409, detail="email already registered") from None
     session.add(AlertPreference(member_id=member.id, household_id=household_id))
+    token = _new_confirm_token(session, member.id)
+    await session.commit()
+    # The account exists now: a mail failure must not turn into a 500 (the user would retry
+    # and hit 409). They can ask for a fresh link via /auth/confirm/resend.
+    await _send_confirmation(sender, member.id, body.email, token)
+    return SignupOut(member_id=member.id, household_id=household_id)
+
+
+async def _send_confirmation(sender: EmailSender, member_id: int, email: str, token: str) -> None:
+    link = f"{get_settings().public_base_url}/confirm?token={token}"
+    try:
+        await sender.send(
+            email,
+            "Confirm your Home Awareness email",
+            f"Confirm your email (valid 24 hours):\n{link}\n\n{DISCLAIMER}",
+        )
+    except Exception as e:  # noqa: BLE001  logged, never raised: the user can resend
+        log.warning(
+            "confirmation email for member %s failed: %s: %s", member_id, type(e).__name__, e
+        )
+
+
+def _new_confirm_token(session: AsyncSession, member_id: int) -> str:
     token = new_token("cf_")
     session.add(
         EmailToken(
-            member_id=member.id,
+            member_id=member_id,
             purpose="confirm",
             token_hash=hash_token(token),
             expires_at=datetime.now(UTC) + CONFIRM_TTL,
         )
     )
-    await session.commit()
-    link = f"{get_settings().public_base_url}/confirm?token={token}"
-    await sender.send(
-        body.email,
-        "Confirm your Home Awareness email",
-        f"Confirm your email (valid 24 hours):\n{link}\n\n{DISCLAIMER}",
-    )
-    return SignupOut(member_id=member.id, household_id=household_id)
+    return token
+
+
+@router.post(
+    "/confirm/resend",
+    status_code=202,
+    dependencies=[Depends(_resend_limit)],
+    description=(
+        "Email a fresh confirmation link if the address is registered and not yet confirmed; "
+        f"earlier links stop working. {DISCLAIMER}"
+    ),
+)
+async def confirm_resend(
+    body: ConfirmResendIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    sender: Annotated[EmailSender, Depends(get_email_sender)],
+) -> dict[str, str]:
+    # Same response whether the address is unknown, confirmed or pending: no enumeration.
+    member = await session.scalar(select(Member).where(Member.email == body.email))
+    if member is not None and not member.email_confirmed:
+        await session.execute(
+            update(EmailToken)
+            .where(
+                EmailToken.member_id == member.id,
+                EmailToken.purpose == "confirm",
+                EmailToken.used_at.is_(None),
+            )
+            .values(used_at=datetime.now(UTC))
+        )
+        token = _new_confirm_token(session, member.id)
+        await session.commit()
+        await _send_confirmation(sender, member.id, member.email, token)
+    return {"detail": "if the address awaits confirmation, an email was sent"}
 
 
 @router.post(
