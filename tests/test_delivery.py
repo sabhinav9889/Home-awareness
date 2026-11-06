@@ -197,7 +197,7 @@ async def test_message_text_exact(signed_up, session, factory, redis, published)
     tg = respx.post(TG_URL).mock(return_value=httpx.Response(200, json={"ok": True}))
     nt = respx.post("https://ntfy.test/t").mock(return_value=httpx.Response(200))
     await _run(alert, factory, redis)
-    expected = "⚠️ Scream detected by Hall at 14:05 — Home Awareness"
+    expected = "⚠️ Scream detected by Hall at 14:05 UTC — Home Awareness"
     import json
 
     assert json.loads(tg.calls[0].request.content) == {"chat_id": "42", "text": expected}

@@ -102,7 +102,7 @@ async def deliver_alert(
             label, text = "Test alert", TEST_TEXT
         else:
             label = get_sound(alert.sound_key).label
-            text = f"⚠️ {label} detected by {device_name} at {at:%H:%M} — Home Awareness"
+            text = f"⚠️ {label} detected by {device_name} at {at:%H:%M} UTC — Home Awareness"
 
         Send = Callable[[], Awaitable[None]]
         plan: list[tuple[Delivery, Send | None]] = []  # None: nothing to send (pre-failed)
