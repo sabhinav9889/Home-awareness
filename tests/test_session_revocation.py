@@ -1,14 +1,16 @@
 """A password reset signs out every session: JWTs (token_version) and agent tokens."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import jwt as pyjwt
 import pytest
 from httpx_ws import WebSocketDisconnect
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from app.auth.models import AgentToken, Member
 from app.config import get_settings
+from app.households.models import Invite
 from app.security import create_access_token
 from tests.test_agent_tokens import _bearer, _closed_code, _mint
 from tests.test_households import _token
@@ -122,3 +124,64 @@ async def test_agent_token_name_is_stripped(client, signed_up, session):
     _, oh = await signed_up()
     made = await _mint(client, oh, name="  my laptop  ")
     assert (await session.get(AgentToken, made["id"])).name == "my laptop"
+
+
+async def test_pre_reset_jwt_cannot_mint_a_token_after_the_reset_commits(
+    client, signed_up, session, monkeypatch
+):
+    owner, oh = await signed_up()
+    real_scalar = session.scalar
+    real_execute = session.execute
+    bumped = []
+
+    async def bump_once(stmt):
+        if "FOR UPDATE" in str(stmt) and not bumped:  # the reset lands before the lock is taken
+            bumped.append(1)
+            # another process's commit: this session's loaded Member stays at version 0
+            await real_execute(
+                update(Member)
+                .where(Member.id == owner.id)
+                .values(token_version=1)
+                .execution_options(synchronize_session=False)
+            )
+            await session.commit()
+
+    async def scalar(stmt, *a, **kw):
+        await bump_once(stmt)
+        return await real_scalar(stmt, *a, **kw)
+
+    async def execute(stmt, *a, **kw):
+        await bump_once(stmt)
+        return await real_execute(stmt, *a, **kw)
+
+    monkeypatch.setattr(session, "scalar", scalar)
+    monkeypatch.setattr(session, "execute", execute)
+    r = await client.post("/me/agent-tokens", json={"name": "late"}, headers=oh)
+    assert r.status_code == 401
+    monkeypatch.undo()
+    assert await session.scalar(select(func.count()).select_from(AgentToken)) == 0
+
+
+async def test_agent_token_name_is_stripped_before_the_length_check(client, signed_up):
+    _, oh = await signed_up()
+    r = await client.post("/me/agent-tokens", json={"name": f"  {'x' * 100}  "}, headers=oh)
+    assert r.status_code == 201
+
+
+async def test_reset_deletes_pending_invites_by_that_member(client, signed_up, outbox, session):
+    owner, oh = await signed_up()
+    assert (await client.post("/households/me/invites", headers=oh)).status_code == 201
+    session.add(
+        Invite(
+            household_id=owner.household_id,
+            token_hash="u" * 64,
+            created_by=owner.id,
+            expires_at=datetime.now(UTC) + timedelta(days=1),
+            used_at=datetime.now(UTC),
+        )
+    )
+    await session.commit()
+    await _reset(client, outbox)
+    await session.rollback()
+    rows = (await session.scalars(select(Invite))).all()
+    assert [i.token_hash for i in rows] == ["u" * 64]

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, StringConstraints, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,14 +28,11 @@ router = APIRouter(tags=["auth"])
 
 
 class AgentTokenIn(BaseModel):
-    name: str = Field(max_length=100)
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 
     @field_validator("name")
     @classmethod
     def _clean(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("name must not be blank")
         if any(not c.isprintable() for c in v):
             raise ValueError("name must not contain control characters")
         return v
@@ -71,7 +68,13 @@ async def create_agent_token(
 ) -> AgentTokenCreated:
     me = tenant.member
     # Lock the member row so concurrent creates can't both pass the cap.
-    await session.execute(select(Member.id).where(Member.id == me.id).with_for_update())
+    # The same read checks the JWT's version: a reset that committed while we waited on the
+    # lock must not let a pre-reset session mint a token that outlives it.
+    version = await session.scalar(
+        select(Member.token_version).where(Member.id == me.id).with_for_update()
+    )
+    if version != me.token_version:
+        raise HTTPException(status_code=401, detail="invalid credentials")
     active = await session.scalar(
         tenant.select(AgentToken)
         .where(AgentToken.member_id == me.id, AgentToken.revoked_at.is_(None))

@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from redis.asyncio import Redis
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -282,6 +282,12 @@ async def password_reset_confirm(
         update(AgentToken)
         .where(AgentToken.member_id == member_id, AgentToken.revoked_at.is_(None))
         .values(revoked_at=now)
+    )
+    # A stolen session may have invited an attacker: drop this member's pending invites.
+    await session.execute(
+        delete(Invite).where(
+            Invite.created_by == member_id, Invite.used_at.is_(None), Invite.expires_at > now
+        )
     )
     # Retire any other outstanding reset links for this member.
     await session.execute(

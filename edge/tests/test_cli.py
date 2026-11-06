@@ -576,3 +576,19 @@ def test_config_without_agent_token_id_still_loads(cfgdir):
     from ha_edge import config
 
     assert config.load_agent().agent_token_id is None
+
+
+@respx.mock
+def test_agent_relogin_to_another_server_revokes_nothing(cfgdir, monkeypatch):
+    from ha_edge import config
+
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": PASSWORD)
+    config.save_agent(
+        config.AgentConfig("http://other", "a@b.c", agent_token="ha_agent_old", agent_token_id=5)
+    )
+    _relogin_mocks()
+    other = respx.delete(url__regex=r"http://.*/me/agent-tokens/5").mock(
+        return_value=httpx.Response(204)
+    )
+    assert cli.agent_main(["login", "--server", "http://srv", "--email", "a@b.c"]) == 0
+    assert not other.called
