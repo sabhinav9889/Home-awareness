@@ -18,7 +18,7 @@ class Alert(Base):
     household_id: Mapped[int] = mapped_column(
         ForeignKey("households.id", ondelete="CASCADE"), index=True
     )
-    member_id: Mapped[int] = mapped_column(ForeignKey("members.id", ondelete="CASCADE"))
+    member_id: Mapped[int] = mapped_column(ForeignKey("members.id", ondelete="CASCADE"), index=True)
     event_id: Mapped[int | None] = mapped_column(
         ForeignKey("events.id", ondelete="SET NULL"), nullable=True
     )

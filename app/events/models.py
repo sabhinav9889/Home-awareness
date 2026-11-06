@@ -15,7 +15,7 @@ class Event(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     household_id: Mapped[int] = mapped_column(ForeignKey("households.id", ondelete="CASCADE"))
     device_id: Mapped[int | None] = mapped_column(
-        ForeignKey("devices.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("devices.id", ondelete="SET NULL"), nullable=True, index=True
     )
     sound_key: Mapped[str] = mapped_column(String(40))
     confidence: Mapped[float] = mapped_column(Float)
