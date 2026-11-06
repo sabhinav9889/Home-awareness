@@ -128,10 +128,41 @@ async def test_removed_member_socket_closed_4403(client, signed_up, outbox, redi
 async def test_other_household_receives_nothing(signed_up, redis):
     a, ah = await signed_up(email="a@example.com", household_name="A")
     _, bh = await signed_up(email="b@example.com", household_name="B")
-    async with connect(_url(bh)) as bws:
+    async with connect(_url(ah)) as aws, connect(_url(bh)) as bws:
         await publish_to_household(redis, a.household_id, {"kind": "event"})
         await publish_to_member(redis, a.id, {"kind": "alert"})
+        got = {(await _recv(aws))["kind"], (await _recv(aws))["kind"]}  # positive control
+        assert got == {"event", "alert"}
         await _silent(bws)
+
+
+async def test_member_removed_between_auth_and_subscribe_is_closed_4403(
+    client, signed_up, outbox, redis, session, monkeypatch
+):
+    owner, oh = await signed_up()
+    _, mh = await _add_member(client, outbox, oh, "m@example.com")
+    mid = await _member_id(session, "m@example.com")
+    real_pubsub = redis.pubsub
+
+    def racing_pubsub():
+        ps = real_pubsub()
+        real_subscribe = ps.subscribe
+
+        async def subscribe(*channels):
+            # the removal lands after auth succeeded but before we are listening
+            r = await client.delete(f"/households/me/members/{mid}", headers=oh)
+            assert r.status_code == 204
+            await real_subscribe(*channels)
+
+        ps.subscribe = subscribe
+        return ps
+
+    monkeypatch.setattr(redis, "pubsub", racing_pubsub)
+    async with connect(_url(mh)) as ws:
+        await publish_to_household(redis, owner.household_id, {"kind": "event"})
+        with pytest.raises(WebSocketDisconnect) as e:
+            await asyncio.wait_for(ws.receive_json(), WAIT)
+        assert e.value.code == 4403
 
 
 async def test_socket_close_unsubscribes(signed_up, redis):
@@ -216,12 +247,13 @@ async def test_ack_marks_all_members_alerts_for_event_and_broadcasts(
 
 async def test_second_ack_409_names_first_handler(client, signed_up, outbox, session):
     owner, oh, member, mh, ev, oa, ma = await _two_member_setup(client, signed_up, outbox, session)
-    assert (await client.post(f"/alerts/{oa.id}/ack", headers=oh)).status_code == 200
-    r = await client.post(f"/alerts/{ma.id}/ack", headers=mh)
+    oa_id, ma_id = oa.id, ma.id  # the 409 path rolls back, which expires loaded instances
+    assert (await client.post(f"/alerts/{oa_id}/ack", headers=oh)).status_code == 200
+    r = await client.post(f"/alerts/{ma_id}/ack", headers=mh)
     assert r.status_code == 409
     assert r.json() == {"detail": "already handled", "by": "owner@example.com"}
     # the first acknowledger acking again is also "already handled"
-    assert (await client.post(f"/alerts/{oa.id}/ack", headers=oh)).status_code == 409
+    assert (await client.post(f"/alerts/{oa_id}/ack", headers=oh)).status_code == 409
 
 
 async def test_ack_someone_elses_alert_in_same_household_404(client, signed_up, outbox, session):

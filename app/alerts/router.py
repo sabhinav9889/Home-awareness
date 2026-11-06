@@ -155,10 +155,12 @@ async def acknowledge_alert(
         )
     ).all()
     if alert.id not in won:
-        by_id = await session.scalar(select(Alert.acknowledged_by).where(Alert.id == alert.id))
-        winner = await session.scalar(tenant.select(Member).where(Member.id == by_id))
+        await session.refresh(alert)
+        winner = await session.scalar(
+            tenant.select(Member).where(Member.id == alert.acknowledged_by)
+        )
         by = winner.email if winner else None
-        await session.commit()
+        await session.rollback()  # a losing caller persists nothing
         return JSONResponse(status_code=409, content={"detail": "already handled", "by": by})
     await session.commit()
     await publish_to_household(
