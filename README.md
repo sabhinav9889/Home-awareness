@@ -45,6 +45,12 @@ uv run pytest -q && uv run ruff check .
 
 `TEST_DATABASE_URL` must name a database ending in `_test`; the suite drops and recreates its tables and refuses to run otherwise.
 
+## Behaviour notes
+
+- Rate limits answer `429` with a `Retry-After` header (seconds until the window resets). Events are limited to 60 a minute per sensor and 300 a minute per household.
+- Alert texts give the time in UTC. Alerts that could not be delivered within 10 minutes are marked `failed` and never sent late.
+- After the server (or its database) restarts, no sensor is reported offline until it has had a full 180 s to check in again.
+
 ## Observability
 
 - `GET /health` checks Postgres and Redis.
@@ -55,11 +61,11 @@ uv run pytest -q && uv run ruff check .
 ## Manual end-to-end walkthrough
 
 1. `docker compose up --build -d`, then `curl localhost:8000/health`.
-2. Sign up at `/docs` (`POST /auth/signup`). Find the confirmation token in the console email: `docker compose logs api | grep token=`. `POST /auth/confirm` with it, then `POST /auth/login` and use the returned token as the bearer token (the Authorize button in `/docs`).
+2. Sign up at `/docs` (`POST /auth/signup`). Find the confirmation token in the console email: `docker compose logs api | grep token=`. `POST /auth/confirm` with it (lost or expired link: `POST /auth/confirm/resend` with `{"email": ...}` sends a fresh one and retires the old), then `POST /auth/login` and use the returned token as the bearer token (the Authorize button in `/docs`).
 3. `POST /devices/pairing-codes` (`{"name": "Kitchen", "kind": "pi"}`) returns an 8-character code.
 4. Start a fake sensor: `uv run python scripts/fake_sensor.py --base-url http://localhost:8000 --code <CODE> --sound scream`. It pairs (saving the device key to the git-ignored `.fake_sensor_key`, never printing it), sends the event(s), then heartbeats every 60 s until Ctrl-C. Options: `--count`, `--interval`, `--once` (exit after the events). Without `--code` it reuses the saved key.
-5. Expect the event response `202` with `"alerts": 1`; `GET /alerts` shows the alert `sent` with a `websocket` delivery; `GET /metrics` shows the counters.
-6. Stop the sensor (Ctrl-C) and wait about 4 minutes: `GET /devices` shows it `offline`.
+5. Expect the event response `202` with `"alerts": 1`. With a WebSocket client connected (see below), `GET /alerts` shows the alert `sent` with a `websocket` delivery; with nobody connected the websocket delivery is `failed` (`no live listener`), because a popup no one sees reached no one. `GET /metrics` shows the counters.
+6. Stop the sensor (Ctrl-C). A sensor is marked `offline` after 180 s without a heartbeat, but only while the server is still hearing from some other sensor; when every sensor on the server has gone quiet the server assumes it was itself unreachable and waits until nothing has been heard for 10 minutes. With this single fake sensor, `GET /devices` shows it `offline` after about 11 minutes. Restart it and members get "✅ Sensor … is back online." on their external channels.
 7. `docker compose down` (add `-v` to delete the database volume).
 
 For a live feed, connect a WebSocket client to `ws://localhost:8000/ws?token=<login token>`.
