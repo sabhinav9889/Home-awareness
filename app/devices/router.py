@@ -2,7 +2,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from redis.asyncio import Redis
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,7 @@ from app.devices.models import (
     Device,
     PairingCode,
 )
+from app.devices.offline import household_recipients, notify_back_online
 from app.devices.schemas import (
     DeviceConfigOut,
     DeviceOut,
@@ -149,11 +150,13 @@ async def heartbeat(
     device: Annotated[Device, Depends(current_device)],
     session: Annotated[AsyncSession, Depends(get_session)],
     redis: Annotated[Redis, Depends(get_redis)],
+    background: BackgroundTasks,
 ) -> DeviceConfigOut:
     was_offline = device.status == "offline"
     device.last_seen_at = datetime.now(UTC)
     device.status = "online"
     config = await _config(session, device)
+    recipients = await household_recipients(session, device.household_id) if was_offline else []
     await session.commit()
     if was_offline:
         await publish_to_household(
@@ -161,6 +164,8 @@ async def heartbeat(
             device.household_id,
             {"kind": "device_online", "device_id": device.id, "name": device.name},
         )
+        # Same channels as the offline warning, best effort, after the response is sent.
+        background.add_task(notify_back_online, recipients, device.name)
     return config
 
 

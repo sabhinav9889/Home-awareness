@@ -71,6 +71,7 @@ async def test_offline_notifies_household_live_and_channels(
     await _prefs(session, member, telegram=True, telegram_chat_id="42", ntfy_topic="my-topic")
     other_member, _ = await signed_up(email="b@example.com", household_name="B")  # other household
     await _prefs(session, other_member, ntfy_topic="not-mine")
+    await _device(session, other_member, name="Live", age=5)  # the API hears heartbeats
     device = await _device(session, member)
     live = []
 
@@ -137,7 +138,7 @@ class _Ctx:
 async def test_loop_survives_errors_and_cancels_cleanly(redis, monkeypatch):
     calls = []
 
-    async def flaky(session, r, now, *, http=None, settings=None):
+    async def flaky(session, r, now, *, process_started_at=None, http=None, settings=None):
         calls.append(now)
         if len(calls) == 1:
             raise RuntimeError("boom")
@@ -186,6 +187,8 @@ async def test_publish_failure_does_not_block_other_devices(signed_up, session, 
     await _prefs(session, member, ntfy_topic="my-topic")
     await _device(session, member, name="First")
     await _device(session, member, name="Second")
+    other, _ = await signed_up(email="b@example.com", household_name="B")
+    await _device(session, other, name="Live", age=5)  # the API hears heartbeats
     calls = []
 
     async def failing_publish(r, household_id, msg):
@@ -199,3 +202,91 @@ async def test_publish_failure_does_not_block_other_devices(signed_up, session, 
         ids = await check_offline_devices(session, redis, NOW, http=http, settings=SETTINGS)
     assert len(ids) == 2 and len(calls) == 2
     assert nt.call_count == 2  # channels still attempted for the device whose publish raised
+
+
+async def test_no_marking_during_startup_grace(signed_up, session, redis):
+    member, _ = await signed_up()
+    stale = await _device(session, member, name="Stale", age=400)
+    await _device(session, member, name="Live", age=10)  # the API is receiving heartbeats
+    started = NOW - timedelta(seconds=179)
+    got = await check_offline_devices(
+        session, redis, NOW, process_started_at=started, settings=SETTINGS
+    )
+    assert got == []
+    await session.refresh(stale)
+    assert stale.status == "online"
+    got = await check_offline_devices(
+        session, redis, NOW, process_started_at=NOW - timedelta(seconds=180), settings=SETTINGS
+    )
+    assert got == [stale.id]
+
+
+async def test_no_marking_when_no_device_anywhere_heartbeated_recently(signed_up, session, redis):
+    # Every sensor (all households) silent for >180 s: the API itself wasn't receiving
+    # heartbeats (downtime), so marking now would send false offline warnings.
+    member, _ = await signed_up()
+    other, _ = await signed_up(email="b@example.com", household_name="B")
+    a = await _device(session, member, name="A", age=200)
+    b = await _device(session, other, name="B", age=300)
+    assert await check_offline_devices(session, redis, NOW, settings=SETTINGS) == []
+    await session.refresh(a)
+    assert a.status == "online"
+    fresh = await _device(session, other, name="Fresh", age=5)  # heartbeats flow again
+    got = await check_offline_devices(session, redis, NOW, settings=SETTINGS)
+    assert sorted(got) == sorted([a.id, b.id]) and fresh.id not in got
+
+
+async def test_long_fleet_silence_still_warns(signed_up, session, redis):
+    # Decision (protects the person relying on alerts): a lone sensor, or a whole home losing
+    # its internet, must still be reported. Once all sensors have been silent for more than
+    # 10 minutes the guard stops suppressing (a recovered API would have heard them by then).
+    member, _ = await signed_up()
+    lone = await _device(session, member, name="Lone", age=601)
+    assert await check_offline_devices(session, redis, NOW, settings=SETTINGS) == [lone.id]
+
+
+async def test_loop_passes_its_start_time(redis, monkeypatch):
+    seen = []
+
+    async def spy(session, r, now, *, process_started_at=None, http=None, settings=None):
+        seen.append((now, process_started_at))
+        return []
+
+    monkeypatch.setattr(offline, "check_offline_devices", spy)
+    times = iter([NOW, NOW + timedelta(seconds=60)])
+    task = asyncio.create_task(
+        offline_loop(_Ctx, redis, interval_s=0.01, clock=lambda: next(times, NOW))
+    )
+    for _ in range(100):
+        if seen:
+            break
+        await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert seen[0] == (NOW + timedelta(seconds=60), NOW)
+
+
+@respx.mock
+async def test_back_online_message_on_external_channels(
+    client, signed_up, session, redis, monkeypatch, frozen_ratelimit_clock, caplog
+):
+    from tests.test_devices import _pair
+
+    member, h = await signed_up()
+    await _prefs(session, member, telegram=True, telegram_chat_id="42", ntfy_topic="my-topic")
+    monkeypatch.setattr(offline, "get_settings", lambda: SETTINGS)
+    paired = await _pair(client, h, name="Hall")
+    dk = {"X-Device-Key": paired["device_key"]}
+    tg = respx.post(TG_URL).mock(return_value=httpx.Response(500, text=f"boom {TOKEN}"))
+    nt = respx.post("https://ntfy.test/my-topic").mock(return_value=httpx.Response(200))
+    assert (await client.post("/device/heartbeat", headers=dk)).status_code == 200
+    assert not tg.called and not nt.called  # pending -> online: nothing to recover from
+    await session.execute(update(Device).values(status="offline"))
+    assert (await client.post("/device/heartbeat", headers=dk)).status_code == 200  # tg failed
+    text = "✅ Sensor Hall is back online."
+    assert nt.call_count == 1 and nt.calls[0].request.content.decode() == text
+    assert tg.call_count == 1 and text in tg.calls[0].request.content.decode()
+    assert TOKEN not in caplog.text
+    assert (await client.post("/device/heartbeat", headers=dk)).status_code == 200
+    assert nt.call_count == 1  # online -> online: no repeat
