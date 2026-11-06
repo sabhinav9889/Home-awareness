@@ -2,17 +2,26 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import current_member
 from app.auth.models import EmailToken, Member
-from app.auth.schemas import ConfirmIn, LoginIn, MeOut, SignupIn, SignupOut, TokenOut
+from app.auth.schemas import (
+    ConfirmIn,
+    LoginIn,
+    MeOut,
+    ResetConfirmIn,
+    ResetRequestIn,
+    SignupIn,
+    SignupOut,
+    TokenOut,
+)
 from app.config import get_settings
 from app.db import get_session
 from app.email import EmailSender, get_email_sender
-from app.households.models import Household
+from app.households.models import Household, Invite
 from app.ratelimit import by_ip, rate_limit
 from app.security import (
     create_access_token,
@@ -24,10 +33,12 @@ from app.security import (
 
 DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
 CONFIRM_TTL = timedelta(hours=24)
+RESET_TTL = timedelta(hours=1)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 _signup_limit = rate_limit("signup", 10, 60, by_ip)
 _login_limit = rate_limit("login", 10, 60, by_ip)
+_reset_limit = rate_limit("password-reset", 10, 60, by_ip)
 # Hash verified against when the email is unknown, to even out login timing.
 _DUMMY_HASH = hash_password("dummy-password-for-timing")
 
@@ -47,14 +58,32 @@ async def signup(
     exists = await session.scalar(select(Member.id).where(Member.email == body.email))
     if exists is not None:
         raise HTTPException(status_code=409, detail="email already registered")
-    household = Household(name=body.household_name)
-    session.add(household)
-    await session.flush()
+    if body.invite_token is not None:
+        # Atomic single-use claim: only one concurrent signup can win the invite.
+        household_id = await session.scalar(
+            update(Invite)
+            .where(
+                Invite.token_hash == hash_token(body.invite_token),
+                Invite.used_at.is_(None),
+                Invite.expires_at > datetime.now(UTC),
+            )
+            .values(used_at=datetime.now(UTC))
+            .returning(Invite.household_id)
+        )
+        if household_id is None:
+            raise HTTPException(status_code=400, detail="invalid or expired invite")
+        role = "member"
+    else:
+        household = Household(name=body.household_name)
+        session.add(household)
+        await session.flush()
+        household_id = household.id
+        role = "owner"
     member = Member(
-        household_id=household.id,
+        household_id=household_id,
         email=body.email,
         password_hash=hash_password(body.password),
-        role="owner",
+        role=role,
     )
     session.add(member)
     try:
@@ -78,7 +107,7 @@ async def signup(
         "Confirm your Home Awareness email",
         f"Confirm your email (valid 24 hours):\n{link}\n\n{DISCLAIMER}",
     )
-    return SignupOut(member_id=member.id, household_id=household.id)
+    return SignupOut(member_id=member.id, household_id=household_id)
 
 
 @router.post(
@@ -123,3 +152,76 @@ async def me(member: Annotated[Member, Depends(current_member)]) -> MeOut:
     return MeOut(
         id=member.id, email=member.email, role=member.role, household_id=member.household_id
     )
+
+
+@router.post(
+    "/password-reset/request",
+    status_code=202,
+    dependencies=[Depends(_reset_limit)],
+    description=f"Email a password reset link if the address is registered. {DISCLAIMER}",
+)
+async def password_reset_request(
+    body: ResetRequestIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    sender: Annotated[EmailSender, Depends(get_email_sender)],
+) -> dict[str, str]:
+    # Same response and same token work whether or not the address exists.
+    token = new_token("rs_")
+    token_hash = hash_token(token)
+    member = await session.scalar(select(Member).where(Member.email == body.email))
+    if member is not None:
+        session.add(
+            EmailToken(
+                member_id=member.id,
+                purpose="reset",
+                token_hash=token_hash,
+                expires_at=datetime.now(UTC) + RESET_TTL,
+            )
+        )
+        await session.commit()
+        link = f"{get_settings().public_base_url}/reset-password?token={token}"
+        await sender.send(
+            member.email,
+            "Reset your Home Awareness password",
+            f"Reset your password (valid 1 hour):\n{link}\n\n{DISCLAIMER}",
+        )
+    return {"detail": "if the address is registered, a reset email was sent"}
+
+
+@router.post(
+    "/password-reset/confirm",
+    status_code=204,
+    dependencies=[Depends(_reset_limit)],
+    description=f"Set a new password using the emailed reset token. {DISCLAIMER}",
+)
+async def password_reset_confirm(
+    body: ResetConfirmIn, session: Annotated[AsyncSession, Depends(get_session)]
+):
+    now = datetime.now(UTC)
+    member_id = await session.scalar(
+        update(EmailToken)
+        .where(
+            EmailToken.token_hash == hash_token(body.token),
+            EmailToken.purpose == "reset",
+            EmailToken.used_at.is_(None),
+            EmailToken.expires_at > now,
+        )
+        .values(used_at=now)
+        .returning(EmailToken.member_id)
+    )
+    if member_id is None:
+        raise HTTPException(status_code=400, detail="invalid or expired token")
+    member = await session.get(Member, member_id)
+    member.password_hash = hash_password(body.new_password)
+    # Retire any other outstanding reset links for this member.
+    await session.execute(
+        update(EmailToken)
+        .where(
+            EmailToken.member_id == member_id,
+            EmailToken.purpose == "reset",
+            EmailToken.used_at.is_(None),
+        )
+        .values(used_at=now)
+    )
+    await session.commit()
+    return Response(status_code=204)

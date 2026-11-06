@@ -110,3 +110,11 @@ async def signed_up(client, session, outbox):
         return member, headers
 
     return _make
+
+
+@pytest.fixture
+async def two_households(signed_up):
+    """Two independent households -> (headers_a, headers_b)."""
+    _, headers_a = await signed_up(email="a@example.com", household_name="A")
+    _, headers_b = await signed_up(email="b@example.com", household_name="B")
+    return headers_a, headers_b
