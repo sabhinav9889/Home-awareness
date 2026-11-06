@@ -1,3 +1,32 @@
+"""Tenant: the only sanctioned way to read or write household-owned rows.
+
+Sanctioned bypasses. Each is safe because the household is fixed by something the caller
+proved (a secret token, a code, a device key, a JWT) or by a row already scoped elsewhere,
+never by client-chosen ids:
+
+- Pair claim (devices/router.pair_device): the single-use code hash finds the PairingCode;
+  the household comes from that row, and the new Device is then added through a Tenant.
+- Engine Alert insert (rules/engine.process_event): household_id is copied from the event,
+  which was created through the device's Tenant; member ids come from that same household.
+- Delivery and deliveries via alert (alerts/delivery, alerts/router.list_alerts): the worker
+  claims an alert by id (ids come only from committed rows the server created) and then
+  reads its prefs/event/device through Tenant.for_household(alert.household_id); Delivery
+  rows have no household_id and are reached only through alerts already scoped.
+- Offline sweep (devices/offline.check_offline_devices): a deliberate cross-household
+  UPDATE of stale devices plus max(last_seen_at); each household is then notified through
+  its own Tenant.
+- Telegram relink clear (alerts/router.telegram_webhook): clears the chat id wherever it is
+  linked, keyed on the chat that just proved a fresh one-time code; only unlinks, never reads.
+- effective.py household reads (rules/effective): filter on an explicit household_id or
+  member_id that the caller already scoped (member from a JWT, household from a device).
+- Signup AlertPreference insert (auth/router.signup): the household was just created, or
+  just claimed through a single-use invite, in the same transaction as the member.
+- Invite claim (auth/router.signup): an atomic UPDATE on the invite token hash; the token
+  itself carries the household.
+- Auth lookups (auth/router, auth/deps, devices/deps, live/router): members by email, id
+  from a verified JWT, or devices by key hash, i.e. identifying who is calling at all.
+"""
+
 from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException
@@ -10,7 +39,7 @@ from app.db import get_session
 
 
 class Tenant:
-    """The only sanctioned way to read or write household-owned rows."""
+    """The only sanctioned way to read or write household-owned rows (see module doc)."""
 
     def __init__(
         self, member: Member | None, session: AsyncSession, household_id: int | None = None
