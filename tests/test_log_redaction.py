@@ -1,37 +1,53 @@
-import logging
+"""Bot-token redaction, checked in fresh interpreters: in-process checks can't fail once any
+earlier test has installed the (process-global, idempotent) record factory."""
 
-import httpx
-import respx
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
 
-from app.alerts import telegram
-
+ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "123:SECRET-TOKEN_x"
+ENV = {
+    "DATABASE_URL": "postgresql+asyncpg://u:p@localhost:1/none",
+    "REDIS_URL": "redis://localhost:1/0",
+    "JWT_SECRET": "subprocess-only-jwt-secret-0123456789abcdef",
+    "PATH": "/usr/bin:/bin",
+}
 
 
-async def _send_and_log(caplog):
-    caplog.set_level(logging.INFO)
-    respx.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage").mock(
-        return_value=httpx.Response(200, json={"ok": True})
+def _run(setup: str, tmp_path) -> str:
+    code = textwrap.dedent(
+        f"""
+        import logging, sys
+        sys.path.insert(0, {str(ROOT)!r})
+        logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(name)s %(message)s")
+        {setup}
+        logging.getLogger("httpx").setLevel(logging.INFO)  # even if something re-enables it
+        url = "https://api.telegram.org/bot{TOKEN}/sendMessage"
+        logging.getLogger("httpx").info('HTTP Request: POST %s "HTTP/1.1 200 OK"', url)
+        logging.getLogger("app.anything").info("calling %s", url)
+        """
     )
-    async with httpx.AsyncClient() as http:
-        await telegram.send_message(http, TOKEN, "42", "hi")
-    logging.getLogger("app.test").info("url https://api.telegram.org/bot%s/x", TOKEN)
+    out = subprocess.run(
+        [sys.executable, "-I", "-c", code],
+        cwd=tmp_path,  # no .env here: the child sees only ENV
+        env=ENV,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert out.returncode == 0, out.stderr
+    return out.stdout
 
 
-@respx.mock
-async def test_celery_worker_logging_config_never_logs_bot_token(caplog):
-    from app.alerts import celery_app
-
-    celery_app.protect_logs()  # what the worker/beat run via Celery's logging signals
-    await _send_and_log(caplog)
-    assert TOKEN not in caplog.text
-    assert "bot***" in caplog.text  # the filter redacts even non-httpx records
+def test_celery_entrypoint_never_logs_bot_token(tmp_path):
+    out = _run("import app.alerts.celery_app", tmp_path)
+    assert TOKEN not in out
+    assert out.count("bot***") == 2, out  # both records were emitted, redacted
 
 
-@respx.mock
-async def test_app_configure_logging_never_logs_bot_token(caplog):
-    from app.logging import configure_logging
-
-    configure_logging()
-    await _send_and_log(caplog)
-    assert TOKEN not in caplog.text
+def test_api_configure_logging_never_logs_bot_token(tmp_path):
+    out = _run("from app.logging import configure_logging; configure_logging()", tmp_path)
+    assert TOKEN not in out
+    assert out.count("bot***") == 2, out
