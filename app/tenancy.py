@@ -1,7 +1,7 @@
 from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException
-from sqlalchemy import Select, select
+from sqlalchemy import Select, Update, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import current_member
@@ -39,6 +39,9 @@ class Tenant:
 
     def select(self, model: Any) -> Select:
         return select(model).where(model.household_id == self.household_id)
+
+    def update(self, model: Any) -> Update:
+        return update(model).where(model.household_id == self.household_id)
 
     async def get(self, model: Any, id: int) -> Any:
         # Missing and other-household rows are indistinguishable: both 404.

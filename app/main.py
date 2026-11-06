@@ -11,6 +11,7 @@ from app.db import get_session
 from app.devices.router import router as devices_router
 from app.events.router import router as events_router
 from app.households.router import router as households_router
+from app.live.router import router as live_router
 from app.logging import configure_logging
 from app.redis import get_redis
 from app.rules.router import router as rules_router
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(devices_router)
     app.include_router(events_router)
     app.include_router(alerts_router)
+    app.include_router(live_router)
     return app
 
 

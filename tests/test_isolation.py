@@ -29,6 +29,7 @@ TENANT_404 = {"detail": "not found"}
 HOUSEHOLD_SCOPED_ROUTES: list[tuple[str, str, dict | None]] = [
     ("DELETE", "/households/me/members/{a_member_id}", None),
     ("DELETE", "/devices/{a_device_id}", None),
+    ("POST", "/alerts/{a_alert_id}/ack", None),
 ]
 
 Creator = Callable[..., Awaitable[dict[str, int]]]

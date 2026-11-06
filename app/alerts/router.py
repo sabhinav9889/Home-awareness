@@ -1,18 +1,23 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.alerts.jobs import JobRunner, get_job_runner
 from app.alerts.models import Alert, Delivery
+from app.auth.models import Member
 from app.catalog import SOUNDS
 from app.db import get_session
 from app.devices.models import Device
 from app.events.models import Event
+from app.live.hub import publish_to_household
 from app.ratelimit import by_member, rate_limit
+from app.redis import get_redis
 from app.tenancy import Tenant, get_tenant
 
 DISCLAIMER = "Home-awareness tool. Not a medical device, security alarm, or emergency service."
@@ -111,3 +116,62 @@ async def test_alert(
     await session.commit()  # commit before enqueue: workers must see the row
     await jobs.enqueue_alert(alert.id)
     return TestAlertAccepted(alert_id=alert.id)
+
+
+class AckOut(BaseModel):
+    alert_id: int
+    event_id: int | None
+    acknowledged_by: int
+    acknowledged_at: datetime
+
+
+@router.post(
+    "/alerts/{alert_id}/ack",
+    response_model=AckOut,
+    responses={409: {"description": "Another member already handled this event"}},
+    description=f"Tell the household 'I'm on it'. First acknowledger wins. {DISCLAIMER}",
+)
+async def acknowledge_alert(
+    alert_id: int,
+    tenant: Annotated[Tenant, Depends(get_tenant)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
+):
+    alert = await tenant.get(Alert, alert_id)
+    if alert.member_id != tenant.member.id:
+        raise HTTPException(status_code=404, detail="not found")
+    me = tenant.member
+    now = datetime.now(UTC)
+    target = Alert.id == alert.id
+    if alert.event_id is not None:
+        target = Alert.event_id == alert.event_id
+    # One conditional UPDATE: concurrent acks serialize on the row locks and only one matches.
+    won = (
+        await session.scalars(
+            tenant.update(Alert)
+            .where(target, Alert.acknowledged_by.is_(None))
+            .values(acknowledged_by=me.id, acknowledged_at=now)
+            .returning(Alert.id)
+        )
+    ).all()
+    if alert.id not in won:
+        by_id = await session.scalar(select(Alert.acknowledged_by).where(Alert.id == alert.id))
+        winner = await session.scalar(tenant.select(Member).where(Member.id == by_id))
+        by = winner.email if winner else None
+        await session.commit()
+        return JSONResponse(status_code=409, content={"detail": "already handled", "by": by})
+    await session.commit()
+    await publish_to_household(
+        redis,
+        tenant.household_id,
+        {
+            "kind": "alert_ack",
+            "event_id": alert.event_id,
+            "by_member_id": me.id,
+            "by_email": me.email,
+            "at": now.isoformat(),
+        },
+    )
+    return AckOut(
+        alert_id=alert.id, event_id=alert.event_id, acknowledged_by=me.id, acknowledged_at=now
+    )
