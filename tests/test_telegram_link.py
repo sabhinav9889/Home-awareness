@@ -13,6 +13,7 @@ TOKEN = "123:SECRET-TOKEN"
 SECRET = "hook-secret"
 TG_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 HOOK = f"/telegram/webhook/{SECRET}"
+HDR = {"X-Telegram-Bot-Api-Secret-Token": SECRET}
 LINKED = "✅ Linked. You'll get Home Awareness alerts here."
 EXPIRED = "Link expired. Create a new one in the dashboard."
 
@@ -60,7 +61,7 @@ async def test_link_flow_sets_chat_and_enables_telegram(client, session, redis, 
     assert await redis.get(f"tglink:{code}") is None  # only the hash is stored
     assert 0 < await redis.ttl(f"tglink:{hash_token(code)}") <= 600
 
-    r = await client.post(HOOK, json=_update(f"/start {code}"))
+    r = await client.post(HOOK, json=_update(f"/start {code}"), headers=HDR)
     assert r.status_code == 200
     p = await _prefs(session, member)
     assert p.telegram is True and p.telegram_chat_id == "555"
@@ -69,7 +70,7 @@ async def test_link_flow_sets_chat_and_enables_telegram(client, session, redis, 
 
     # the code is single-use
     respx.post(TG_URL).respond(200, json={"ok": True})
-    await client.post(HOOK, json=_update(f"/start {code}", chat_id=999))
+    await client.post(HOOK, json=_update(f"/start {code}", chat_id=999), headers=HDR)
     assert (await _prefs(session, member)).telegram_chat_id == "555"
 
 
@@ -93,7 +94,7 @@ async def test_webhook_404_when_secret_unset(client, settings):
 async def test_expired_code_replies_expired_and_changes_nothing(client, session, signed_up):
     member, _ = await signed_up()
     route = respx.post(TG_URL).respond(200, json={"ok": True})
-    r = await client.post(HOOK, json=_update("/start bogus"))
+    r = await client.post(HOOK, json=_update("/start bogus"), headers=HDR)
     assert r.status_code == 200
     assert json.loads(route.calls.last.request.content)["text"] == EXPIRED
     p = await _prefs(session, member)
@@ -117,12 +118,14 @@ async def test_expired_code_replies_expired_and_changes_nothing(client, session,
 )
 async def test_odd_updates_ignored_with_200(client, payload):
     route = respx.post(TG_URL).respond(200, json={"ok": True})
-    assert (await client.post(HOOK, json=payload)).status_code == 200
+    assert (await client.post(HOOK, json=payload, headers=HDR)).status_code == 200
     assert not route.called
 
 
 async def test_malformed_json_is_200(client):
-    r = await client.post(HOOK, content=b"{not json", headers={"Content-Type": "application/json"})
+    r = await client.post(
+        HOOK, content=b"{not json", headers={**HDR, "Content-Type": "application/json"}
+    )
     assert r.status_code == 200
 
 
@@ -131,7 +134,7 @@ async def test_failed_reply_still_200_and_links(client, session, signed_up):
     member, h = await signed_up()
     respx.post(TG_URL).respond(500, json={"ok": False})
     code = await _code(client, h)
-    assert (await client.post(HOOK, json=_update(f"/start {code}"))).status_code == 200
+    assert (await client.post(HOOK, json=_update(f"/start {code}"), headers=HDR)).status_code == 200
     assert (await _prefs(session, member)).telegram_chat_id == "555"
 
 
@@ -140,8 +143,8 @@ async def test_relink_moves_chat_to_newest_member(client, session, signed_up):
     a, ha = await signed_up(email="a@example.com", household_name="A")
     b, hb = await signed_up(email="b@example.com", household_name="B")
     respx.post(TG_URL).respond(200, json={"ok": True})
-    await client.post(HOOK, json=_update(f"/start {await _code(client, ha)}"))
-    await client.post(HOOK, json=_update(f"/start {await _code(client, hb)}"))
+    await client.post(HOOK, json=_update(f"/start {await _code(client, ha)}"), headers=HDR)
+    await client.post(HOOK, json=_update(f"/start {await _code(client, hb)}"), headers=HDR)
     pa, pb = await _prefs(session, a), await _prefs(session, b)
     assert pa.telegram_chat_id is None and pa.telegram is False
     assert pb.telegram_chat_id == "555" and pb.telegram is True
@@ -166,9 +169,28 @@ async def test_link_rate_limited(client, signed_up):
 async def test_unlink_disables_telegram(client, session, signed_up):
     member, h = await signed_up()
     respx.post(TG_URL).respond(200, json={"ok": True})
-    await client.post(HOOK, json=_update(f"/start {await _code(client, h)}"))
+    await client.post(HOOK, json=_update(f"/start {await _code(client, h)}"), headers=HDR)
     assert (await client.delete("/me/telegram", headers=h)).status_code == 204
     p = await _prefs(session, member)
     assert p.telegram is False and p.telegram_chat_id is None
     assert (await client.delete("/me/telegram")).status_code == 401
     assert (await client.delete("/me/telegram", headers=h)).status_code == 204  # idempotent
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "headers",
+    [{}, {"X-Telegram-Bot-Api-Secret-Token": "wrong"}, {"X-Telegram-Bot-Api-Secret-Token": ""}],
+)
+async def test_webhook_requires_secret_token_header(client, headers):
+    route = respx.post(TG_URL).respond(200, json={"ok": True})
+    r = await client.post(HOOK, json=_update("/start x"), headers=headers)
+    assert r.status_code == 404
+    assert r.json() == (await client.post("/telegram/webhook/nope", json={})).json()
+    assert not route.called
+
+
+@respx.mock
+async def test_webhook_with_secret_token_header_ok(client):
+    respx.post(TG_URL).respond(200, json={"ok": True})
+    assert (await client.post(HOOK, json=_update("/start x"), headers=HDR)).status_code == 200

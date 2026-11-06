@@ -31,7 +31,8 @@ Configuration is environment variables only (see `.env.example` and `app/config.
 2. Pick a long random string as the webhook secret.
 3. In `.env` set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME` and `TELEGRAM_WEBHOOK_SECRET`, then restart the stack.
 4. Point Telegram at your server (it must be reachable over HTTPS, e.g. via a tunnel):
-   `curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=<PUBLIC_BASE_URL>/telegram/webhook/<SECRET>"`
+   `curl "https://api.telegram.org/bot<TOKEN>/setWebhook" --data-urlencode "url=<PUBLIC_BASE_URL>/telegram/webhook/<SECRET>" --data-urlencode "secret_token=<SECRET>"`
+   Telegram then sends the secret back in the `X-Telegram-Bot-Api-Secret-Token` header on every update; the server rejects (404) any request without both the path secret and that header. The secret may only contain `A-Z a-z 0-9 _ -` (Telegram's rule for `secret_token`), so pick one that does. If you set the webhook before this header check existed, run the call again.
 5. Signed in, call `POST /me/telegram/link` to get a link, open it in Telegram and press Start.
 
 The bot token and webhook secret are kept out of logs.

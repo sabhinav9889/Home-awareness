@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
@@ -242,10 +242,17 @@ async def telegram_webhook(
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
     redis: Annotated[Redis, Depends(get_redis)],
+    header_token: Annotated[str | None, Header(alias="X-Telegram-Bot-Api-Secret-Token")] = None,
 ) -> dict[str, bool]:
     settings = get_settings()
     expected = settings.telegram_webhook_secret
-    if not expected or not hmac.compare_digest(secret.encode(), expected.encode()):
+    # Both the path secret and Telegram's secret_token header (set via setWebhook) must match.
+    # Evaluate both comparisons so timing doesn't reveal which one failed.
+    path_ok = bool(expected) and hmac.compare_digest(secret.encode(), expected.encode())
+    header_ok = bool(expected) and hmac.compare_digest(
+        (header_token or "").encode(), expected.encode()
+    )
+    if not (path_ok and header_ok):
         raise HTTPException(status_code=404, detail="not found")
     try:
         parsed = _start_code(await request.json())

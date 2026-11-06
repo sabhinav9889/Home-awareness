@@ -54,12 +54,14 @@ async def test_request_log_has_route_template_and_no_secrets(client, monkeypatch
     monkeypatch.setattr(
         alerts_router,
         "get_settings",
-        lambda: type(
-            "S", (), {"telegram_webhook_secret": secret, "telegram_bot_token": None}
-        )(),
+        lambda: type("S", (), {"telegram_webhook_secret": secret, "telegram_bot_token": None})(),
     )
     caplog.set_level(logging.INFO)
-    await client.post(f"/telegram/webhook/{secret}?token=QSECRET", json={"x": "BODYSECRET"})
+    await client.post(
+        f"/telegram/webhook/{secret}?token=QSECRET",
+        json={"x": "BODYSECRET"},
+        headers={"X-Telegram-Bot-Api-Secret-Token": secret},
+    )
     r = await client.get("/health?x=1&jwt=eyJabc", headers={"Authorization": "Bearer HDRSECRET"})
     assert "x-request-id" in r.headers
     await client.get("/no/such/path/PATHSECRET")
