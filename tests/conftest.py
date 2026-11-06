@@ -121,8 +121,9 @@ async def two_households(signed_up):
     return headers_a, headers_b
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def jobs():
+    # autouse: no test may reach a real broker; tests that care take `jobs` by name
     runner = RecordingJobRunner()
     app_main.app.dependency_overrides[get_job_runner] = lambda: runner
     yield runner

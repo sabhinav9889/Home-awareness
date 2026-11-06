@@ -6,7 +6,7 @@ from fastapi import Depends, HTTPException, Request
 from redis.asyncio import Redis
 
 from app.redis import get_redis
-from app.security import hash_token
+from app.security import InvalidToken, decode_access_token, hash_token
 
 
 def by_ip(request: Request) -> str:
@@ -15,6 +15,17 @@ def by_ip(request: Request) -> str:
 
 def by_device_key(request: Request) -> str:
     return hash_token(request.headers.get("X-Device-Key", ""))
+
+
+def by_member(request: Request) -> str:
+    """Key on the member id inside the bearer JWT: no DB lookup, and a forged or invalid
+    token (which the auth dependency rejects with 401 anyway) falls back to its own hash."""
+    header = request.headers.get("Authorization", "")
+    token = header.removeprefix("Bearer ").strip()
+    try:
+        return f"m{decode_access_token(token).member_id}"
+    except InvalidToken:
+        return hash_token(header)
 
 
 def rate_limit(

@@ -5,6 +5,7 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.alerts.router import router as alerts_router
 from app.auth.router import router as auth_router
 from app.db import get_session
 from app.devices.router import router as devices_router
@@ -35,6 +36,7 @@ def create_app() -> FastAPI:
     app.include_router(rules_router)
     app.include_router(devices_router)
     app.include_router(events_router)
+    app.include_router(alerts_router)
     return app
 
 

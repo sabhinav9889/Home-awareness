@@ -77,13 +77,21 @@ async def create_event(client, headers, outbox, tag) -> dict[str, int]:
     return {"event": r.json()["event_id"]}
 
 
-RESOURCE_CREATORS: list[Creator] = [create_member, create_device, create_event]
+async def create_alert(client, headers, outbox, tag) -> dict[str, int]:
+    """Create a test alert for the member owning `headers` and return its id."""
+    r = await client.post("/me/test-alert", headers=headers)
+    assert r.status_code == 202, r.text
+    return {"alert": r.json()["alert_id"]}
+
+
+RESOURCE_CREATORS: list[Creator] = [create_member, create_device, create_event, create_alert]
 
 # (path, extractor(json) -> set of ids, resource name)
 LISTING_ROUTES: list[tuple[str, Callable[[dict], set[int]], str]] = [
     ("/households/me", lambda j: {m["id"] for m in j["members"]}, "member"),
     ("/devices", lambda j: {d["id"] for d in j}, "device"),
     ("/events", lambda j: {e["id"] for e in j}, "event"),
+    ("/alerts", lambda j: {a["id"] for a in j}, "alert"),
 ]
 
 
