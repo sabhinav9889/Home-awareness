@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Alert on phone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#FDBA74}a:hover{color:#FED7AA}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #0B1220; color: #F8FAFC; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; padding: 28px 20px 24px; gap: 20px;">
+
+  <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #CBD5E1;">
+    <span style="width: 8px; height: 8px; border-radius: 50%; background: #F97316;"></span>
+    <span style="flex-grow: 1;">Home Awareness</span>
+    <span>2:14 AM</span>
+  </div>
+
+  <section aria-live="assertive" style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 16px; padding: 0 8px;">
+    <div style="width: 132px; height: 132px; border-radius: 50%; background: #431407; display: flex; align-items: center; justify-content: center;">
+      <div style="width: 92px; height: 92px; border-radius: 50%; background: #C2410C; display: flex; align-items: center; justify-content: center;">
+        <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+      </div>
+    </div>
+    <h1 style="margin: 8px 0 0; font-family: 'Space Grotesk', sans-serif; font-size: 34px; font-weight: 700; line-height: 1.1;">Scream detected</h1>
+    <div style="font-size: 20px; font-weight: 600;">Mom's room</div>
+    <div style="font-size: 15px; color: #CBD5E1; line-height: 1.5;">Spare phone sensor · 2:14:08 AM<br>Confidence 0.91 · also heard by Living room</div>
+  </section>
+
+  <div style="padding: 14px 16px; border-radius: 12px; background: #111A2E; font-size: 14px; color: #E2E8F0; display: flex; gap: 10px; align-items: flex-start;">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#93C5FD" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink: 0; margin-top: 1px;"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
+    <span>Also sent to 2 other members. Next scream alert in this room after a 2 min cooldown.</span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 10px;">
+    <button type="button" style="min-height: 56px; border-radius: 14px; border: 0; background: #F97316; color: #1C0A02; font: 700 17px Inter, sans-serif; cursor: pointer;">I'm on it</button>
+    <div style="display: flex; gap: 10px;">
+      <button type="button" style="flex: 1; min-height: 48px; border-radius: 12px; border: 1px solid #334155; background: transparent; color: #F8FAFC; font: 600 15px Inter, sans-serif; cursor: pointer;">Event details</button>
+      <button type="button" style="flex: 1; min-height: 48px; border-radius: 12px; border: 1px solid #334155; background: transparent; color: #F8FAFC; font: 600 15px Inter, sans-serif; cursor: pointer;">Dismiss</button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

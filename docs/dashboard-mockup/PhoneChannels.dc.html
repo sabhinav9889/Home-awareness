@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Alert channels</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#0F766E}a:hover{color:#115E59}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #F6F7F9; color: #111827; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; padding: 20px 16px; gap: 16px;">
+
+  <header style="display: flex; align-items: center; gap: 12px;">
+    <a href="Main.dc.html" aria-label="Back to overview" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: #FFFFFF; border: 1px solid #E3E6EB;">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#111827" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+    </a>
+    <h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 600;">How I get alerted</h1>
+  </header>
+
+  <p style="margin: 0; font-size: 14px; color: #4B5563; line-height: 1.5;">Pick any mix. These are yours only; other members set their own.</p>
+
+  <sc-for list="{{ channels }}" as="c" hint-placeholder-count="4">
+    <div style="padding: 16px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E3E6EB; display: flex; gap: 14px; align-items: flex-start;">
+      <div style="flex-grow: 1;">
+        <div style="font-weight: 600; font-size: 15px;">{{ c.title }}</div>
+        <div style="margin-top: 4px; font-size: 13px; color: #4B5563; line-height: 1.5;">{{ c.desc }}</div>
+        <sc-if value="{{ c.hasStatus }}" hint-placeholder-val="{{ true }}">
+          <div style="margin-top: 8px; font-size: 13px; font-weight: 600; color: #166534;">{{ c.status }}</div>
+        </sc-if>
+      </div>
+      <button type="button" aria-pressed="{{ c.on }}" aria-label="{{ c.title }}" style="{{ c.trackStyle }}"><span style="width: 26px; height: 26px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0,0,0,.2);"></span></button>
+    </div>
+  </sc-for>
+
+  <div style="flex-grow: 1;"></div>
+
+  <button type="button" style="min-height: 52px; border-radius: 12px; border: 1px solid #0F766E; background: #FFFFFF; color: #0F766E; font: 600 15px Inter, sans-serif;">Send me a test alert</button>
+  <p style="margin: 0; font-size: 12px; color: #4B5563; line-height: 1.5;">Delivery is best effort. Home-awareness tool, not an emergency service.</p>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() {
+  const track = (on) => 'flex-shrink: 0; width: 52px; height: 32px; border-radius: 999px; border: 0; padding: 3px; display: flex; cursor: pointer; ' + (on ? 'background: #0F766E; justify-content: flex-end;' : 'background: #CBD5E1; justify-content: flex-start;');
+  const ch = (title, desc, on, status) => ({ title, desc, on: on ? 'true' : 'false', trackStyle: track(on), hasStatus: !!status, status: status || '' });
+  return {
+    channels: [
+      ch('Popup', 'On the dashboard and on your laptop, even with music playing.', true, ''),
+      ch('Alarm sound', 'Plays through whatever you are listening on, so your headphones when they are in.', false, ''),
+      ch('Telegram', 'A push on your phone. Works when your laptop is off.', true, 'Linked to your Telegram account'),
+      ch('ntfy', 'Push through the free ntfy app, on a secret topic only you know.', false, '')
+    ]
+  };
+}
+}
+</script>
+</body>
+</html>

@@ -87,6 +87,8 @@ Reliability labels are estimates, not measured. An early task must measure each 
 - **Cooldown:** after an alert for an event type on a device, further matching events are logged but do not alert again for a set period. This prevents floods.
 - **Alert channels, chosen per user:** silent popup on the dashboard or laptop, sound alarm, and phone push notification. The user can mix them and can turn the alarm sound off in favour of a popup.
 - **Phone push in v1:** ntfy or a Telegram bot (free, outbound only, no public address needed). Firebase push is a later option.
+- **"I'm on it" (author approved from the dashboard mockup):** any member can acknowledge an alert. Everyone else in the household sees who is handling it, live, so three people don't all run in.
+- **Test alert (author approved from the dashboard mockup):** a member can send themselves a test alert through all their enabled channels.
 - **Delivery is best-effort.** Alert delivery runs as a background job with retries, and failures are recorded.
 
 ## 7. Devices

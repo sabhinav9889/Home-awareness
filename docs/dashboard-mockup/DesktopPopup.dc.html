@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Laptop alert popup</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div style="width: 420px; height: 220px; box-sizing: border-box; padding: 20px; background: #E5E7EB; font-family: Inter, system-ui, sans-serif; display: flex; align-items: center; justify-content: center;">
+  <div role="alertdialog" aria-labelledby="pop-t" style="width: 380px; box-sizing: border-box; padding: 16px; border-radius: 14px; background: #FFFFFF; box-shadow: 0 8px 24px rgba(15,23,42,.18); border-left: 0; display: flex; flex-direction: column; gap: 10px; color: #111827;">
+    <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #4B5563;">
+      <span style="width: 18px; height: 18px; border-radius: 5px; background: #0F766E; display: flex; align-items: center; justify-content: center;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>
+      </span>
+      <span style="flex-grow: 1;">Home Awareness · now</span>
+      <span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; background: #FFEDD5; color: #9A3412; font-weight: 600;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9A3412" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 14v-2a9 9 0 0 1 18 0v2"/><path d="M21 15a2 2 0 0 1-2 2h-1v-5h3z"/><path d="M3 15a2 2 0 0 0 2 2h1v-5H3z"/></svg>
+        Alarm in headphones
+      </span>
+    </div>
+    <div id="pop-t" style="font-size: 16px; font-weight: 700;">Scream detected — Mom's room</div>
+    <div style="font-size: 13px; color: #4B5563;">2:14 AM · spare phone sensor · confidence 0.91</div>
+    <div style="display: flex; gap: 8px; margin-top: 2px;">
+      <button type="button" style="flex: 1; min-height: 40px; border-radius: 10px; border: 0; background: #C2410C; color: #FFFFFF; font: 600 14px Inter, sans-serif;">I'm on it</button>
+      <button type="button" style="flex: 1; min-height: 40px; border-radius: 10px; border: 1px solid #D1D5DB; background: #FFFFFF; color: #111827; font: 600 14px Inter, sans-serif;">Stop alarm</button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":420,"height":220}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Overview</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F6F7F9}
+a{color:#0F766E}a:hover{color:#115E59}
+</style>
+</helmet>
+<div style="font-family: Inter, system-ui, sans-serif; color: #111827; background: #F6F7F9; min-height: 900px; display: flex; flex-wrap: wrap;">
+
+  <nav aria-label="Main" style="flex: 1 1 220px; max-width: 260px; box-sizing: border-box; padding: 24px 16px; background: #FFFFFF; border-right: 1px solid #E3E6EB; display: flex; flex-direction: column; gap: 4px;">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 0 8px 20px;">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0F766E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 15a3 3 0 0 1 4 0"/><path d="M8.5 13a6 6 0 0 1 7 0"/></svg>
+      <span style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 18px;">Home Awareness</span>
+    </div>
+    <a href="#" aria-current="page" style="display: block; padding: 11px 12px; border-radius: 8px; background: #E6F4F2; color: #0F5F58; font-weight: 600; text-decoration: none; font-size: 14px;">Overview</a>
+    <a href="#" style="display: block; padding: 11px 12px; border-radius: 8px; color: #374151; text-decoration: none; font-size: 14px;">Event history</a>
+    <a href="Sounds.dc.html" style="display: block; padding: 11px 12px; border-radius: 8px; color: #374151; text-decoration: none; font-size: 14px;">Sounds &amp; rules</a>
+    <a href="#" style="display: block; padding: 11px 12px; border-radius: 8px; color: #374151; text-decoration: none; font-size: 14px;">Alerts</a>
+    <a href="PhoneSensors.dc.html" style="display: block; padding: 11px 12px; border-radius: 8px; color: #374151; text-decoration: none; font-size: 14px;">Sensors</a>
+    <a href="PhoneChannels.dc.html" style="display: block; padding: 11px 12px; border-radius: 8px; color: #374151; text-decoration: none; font-size: 14px;">Alert channels</a>
+    <a href="#" style="display: block; padding: 11px 12px; border-radius: 8px; color: #374151; text-decoration: none; font-size: 14px;">Household</a>
+    <div style="flex-grow: 1;"></div>
+    <div style="padding: 12px; border-radius: 10px; background: #F6F7F9; font-size: 13px; line-height: 1.5;">
+      <div style="font-weight: 600;">[Household name]</div>
+      <div style="color: #4B5563;">3 members · you are owner</div>
+    </div>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 28px 32px 40px; display: flex; flex-direction: column; gap: 24px; max-width: 1180px;">
+
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;">
+      <h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 28px; font-weight: 600; flex-grow: 1;">Overview</h1>
+      <span style="display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: #FFFFFF; border: 1px solid #E3E6EB; font-size: 13px; color: #374151;">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #15803D;"></span>Live · connected
+      </span>
+      <button type="button" style="min-height: 44px; padding: 0 18px; border-radius: 10px; border: 0; background: #0F766E; color: #FFFFFF; font: 600 14px Inter, sans-serif; cursor: pointer;">Add sensor</button>
+    </header>
+
+    <section aria-label="Status" style="display: flex; flex-wrap: wrap; gap: 20px; align-items: center; padding: 24px; border-radius: 16px; background: #0F172A; color: #F8FAFC;">
+      <div style="width: 56px; height: 56px; border-radius: 50%; background: #134E4A; display: flex; align-items: center; justify-content: center;">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#5EEAD4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+      </div>
+      <div style="flex: 1 1 320px;">
+        <div style="font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 600;">All quiet right now</div>
+        <div style="margin-top: 4px; font-size: 14px; color: #CBD5E1;">2 of 3 sensors listening · last alert 2:14 AM, scream in Mom's room</div>
+      </div>
+      <div style="display: flex; gap: 28px; font-size: 13px; color: #CBD5E1;">
+        <div><div style="font-family: 'Space Grotesk', sans-serif; font-size: 26px; color: #FFFFFF; font-weight: 600;">14</div>events today</div>
+        <div><div style="font-family: 'Space Grotesk', sans-serif; font-size: 26px; color: #FFFFFF; font-weight: 600;">2</div>alerts today</div>
+        <div><div style="font-family: 'Space Grotesk', sans-serif; font-size: 26px; color: #FFFFFF; font-weight: 600;">3</div>sounds on</div>
+      </div>
+    </section>
+
+    <section aria-labelledby="sensors-h" style="display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: baseline; gap: 12px;">
+        <h2 id="sensors-h" style="margin: 0; font-size: 16px; font-weight: 600; flex-grow: 1;">Sensors</h2>
+        <a href="PhoneSensors.dc.html" style="font-size: 14px;">Manage</a>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px;">
+        <article style="padding: 18px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E3E6EB; display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 8px;"><span style="width: 10px; height: 10px; border-radius: 50%; background: #15803D;"></span><span style="font-size: 13px; color: #166534; font-weight: 600;">Listening</span></div>
+          <div style="font-weight: 600; font-size: 16px;">Mom's room</div>
+          <div style="font-size: 13px; color: #4B5563;">Spare phone · heartbeat 12 s ago</div>
+        </article>
+        <article style="padding: 18px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E3E6EB; display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 8px;"><span style="width: 10px; height: 10px; border-radius: 50%; background: #15803D;"></span><span style="font-size: 13px; color: #166534; font-weight: 600;">Listening</span></div>
+          <div style="font-weight: 600; font-size: 16px;">Living room</div>
+          <div style="font-size: 13px; color: #4B5563;">Laptop · heartbeat 40 s ago</div>
+        </article>
+        <article style="padding: 18px; border-radius: 14px; background: #FFFBEB; border: 1px solid #FCD34D; display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 8px;"><span style="width: 10px; height: 10px; border-radius: 50%; border: 2px solid #B45309; box-sizing: border-box;"></span><span style="font-size: 13px; color: #92400E; font-weight: 600;">Offline 6 min</span></div>
+          <div style="font-weight: 600; font-size: 16px;">Kitchen</div>
+          <div style="font-size: 13px; color: #78350F;">Raspberry Pi · alerts from it have stopped</div>
+        </article>
+      </div>
+    </section>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start;">
+      <section aria-labelledby="feed-h" style="flex: 999 1 440px; min-width: 0; padding: 20px; border-radius: 16px; background: #FFFFFF; border: 1px solid #E3E6EB;">
+        <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px;">
+          <h2 id="feed-h" style="margin: 0; font-size: 16px; font-weight: 600; flex-grow: 1;">Live events</h2>
+          <a href="#" style="font-size: 14px;">Full history</a>
+        </div>
+        <div style="overflow-x: auto;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px; min-width: 460px;">
+            <thead>
+              <tr style="text-align: left; color: #4B5563; font-size: 12px; text-transform: uppercase; letter-spacing: .04em;">
+                <th style="padding: 10px 8px; font-weight: 600;">Time</th><th style="padding: 10px 8px; font-weight: 600;">Sound</th><th style="padding: 10px 8px; font-weight: 600;">Sensor</th><th style="padding: 10px 8px; font-weight: 600;">Confidence</th><th style="padding: 10px 8px; font-weight: 600;">Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-top: 1px solid #EEF0F3;"><td style="padding: 12px 8px; color: #4B5563;">2:14:08</td><td style="padding: 12px 8px; font-weight: 600;">Scream</td><td style="padding: 12px 8px;">Mom's room</td><td style="padding: 12px 8px;">0.91</td><td style="padding: 12px 8px;"><span style="padding: 3px 10px; border-radius: 999px; background: #FFEDD5; color: #9A3412; font-size: 12px; font-weight: 600;">Alerted 3</span></td></tr>
+              <tr style="border-top: 1px solid #EEF0F3;"><td style="padding: 12px 8px; color: #4B5563;">2:14:09</td><td style="padding: 12px 8px; font-weight: 600;">Scream</td><td style="padding: 12px 8px;">Living room</td><td style="padding: 12px 8px;">0.64</td><td style="padding: 12px 8px;"><span style="padding: 3px 10px; border-radius: 999px; background: #DBEAFE; color: #1E40AF; font-size: 12px; font-weight: 600;">Merged</span></td></tr>
+              <tr style="border-top: 1px solid #EEF0F3;"><td style="padding: 12px 8px; color: #4B5563;">1:52:40</td><td style="padding: 12px 8px; font-weight: 600;">Dog barking</td><td style="padding: 12px 8px;">Living room</td><td style="padding: 12px 8px;">0.88</td><td style="padding: 12px 8px;"><span style="padding: 3px 10px; border-radius: 999px; background: #F1F5F9; color: #334155; font-size: 12px; font-weight: 600;">Logged · 2 of 5</span></td></tr>
+              <tr style="border-top: 1px solid #EEF0F3;"><td style="padding: 12px 8px; color: #4B5563;">11:03:15</td><td style="padding: 12px 8px; font-weight: 600;">Glass breaking</td><td style="padding: 12px 8px;">Kitchen</td><td style="padding: 12px 8px;">0.79</td><td style="padding: 12px 8px;"><span style="padding: 3px 10px; border-radius: 999px; background: #F1F5F9; color: #334155; font-size: 12px; font-weight: 600;">Cooldown</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="ch-h" style="flex: 1 1 260px; padding: 20px; border-radius: 16px; background: #FFFFFF; border: 1px solid #E3E6EB; display: flex; flex-direction: column; gap: 12px;">
+        <h2 id="ch-h" style="margin: 0; font-size: 16px; font-weight: 600;">How you get alerted</h2>
+        <div style="display: flex; justify-content: space-between; font-size: 14px;"><span>Popup on this laptop</span><span style="color: #166534; font-weight: 600;">On</span></div>
+        <div style="display: flex; justify-content: space-between; font-size: 14px;"><span>Alarm in headphones</span><span style="color: #4B5563;">Off</span></div>
+        <div style="display: flex; justify-content: space-between; font-size: 14px;"><span>Telegram</span><span style="color: #166534; font-weight: 600;">Linked</span></div>
+        <div style="display: flex; justify-content: space-between; font-size: 14px;"><span>ntfy</span><span style="color: #4B5563;">Off</span></div>
+        <a href="PhoneChannels.dc.html" style="font-size: 14px; margin-top: 4px;">Change channels</a>
+      </section>
+    </div>
+
+    <p style="margin: 0; font-size: 12px; color: #4B5563;">Home-awareness tool. Not a medical device, security alarm, or emergency service. Audio is analysed on each sensor and never uploaded.</p>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":900}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

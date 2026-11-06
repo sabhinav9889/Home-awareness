@@ -245,7 +245,7 @@ async def test_health_reports_db_and_redis(client):
 **Interfaces:**
 - Consumes: `members_enabled_for`, `JobRunner` (from Task 9 — define `app/alerts/jobs.py` with only the Protocol and a `RecordingJobRunner` test double now; test fixture `jobs` overrides `get_job_runner`).
 - Produces:
-  - `Alert(id, household_id FK cascade, member_id FK cascade, event_id FK, sound_key, created_at, status: "pending"|"sent"|"partial"|"failed")`. `Delivery(id, alert_id FK cascade, channel: "telegram"|"ntfy"|"websocket", status: "pending"|"sent"|"failed", attempts: int, last_error: str|None, updated_at)`.
+  - `Alert(id, household_id FK cascade, member_id FK cascade, event_id FK nullable (null for test alerts), sound_key, created_at, status: "pending"|"sent"|"partial"|"failed", acknowledged_by: int FK member nullable, acknowledged_at nullable)`. `Delivery(id, alert_id FK cascade, channel: "telegram"|"ntfy"|"websocket", status: "pending"|"sent"|"failed", attempts: int, last_error: str|None, updated_at)`.
   - `@dataclass RuleOutcome(merged: bool, alert_ids: list[int])`.
   - `async def process_event(session, redis, jobs: JobRunner, event: Event, now: float) -> RuleOutcome` — `now` is server time in epoch seconds (injectable for tests).
 
@@ -295,8 +295,9 @@ async def test_health_reports_db_and_redis(client):
   - WebSocket channel calls `app.live.hub.publish_to_member(redis, member_id, {"kind":"alert", "alert_id", "sound_key", "label", "device_name", "at", "popup": bool, "alarm": bool})` (stub until Task 10; "sent" means published).
   - `celery_app.py`: `celery = Celery("home", broker=settings.redis_url)`; task `deliver_alert_task(alert_id)` runs `asyncio.run(deliver_alert(alert_id))`.
   - `GET /alerts?limit=50` → member's own alerts with deliveries (household-scoped and member-scoped).
+  - `POST /me/test-alert` → 202 `{alert_id}`: creates an `Alert` with `event_id = None`, `sound_key = "test"` and enqueues it; message text (exact) `"🔔 Test alert from Home Awareness — your alerts work."`; rate limit 3 per minute per member.
 
-- [ ] **Step 1: Write failing tests** (respx for HTTP, fake `sleep`): `test_delivers_to_all_enabled_channels`; `test_telegram_retries_3_times_then_failed_other_channels_still_sent` (Review Focus 4: Telegram returns 403 `bot was blocked`; ntfy 200 → telegram delivery `failed` with error text, attempts 3; ntfy `sent`; alert `partial`); `test_message_text_exact`; `test_inprocess_runner_runs_delivery`; `test_job_runner_selected_by_setting`; `test_alerts_list_only_own`. Append `GET /alerts` to the isolation list.
+- [ ] **Step 1: Write failing tests** (respx for HTTP, fake `sleep`): `test_delivers_to_all_enabled_channels`; `test_telegram_retries_3_times_then_failed_other_channels_still_sent` (Review Focus 4: Telegram returns 403 `bot was blocked`; ntfy 200 → telegram delivery `failed` with error text, attempts 3; ntfy `sent`; alert `partial`); `test_message_text_exact`; `test_inprocess_runner_runs_delivery`; `test_job_runner_selected_by_setting`; `test_alerts_list_only_own`; `test_test_alert_uses_all_enabled_channels_and_exact_text`; `test_test_alert_rate_limited_4th_429`. Append `GET /alerts` to the isolation list.
 - [ ] **Step 2–4:** FAIL → implement → `uv run pytest -q` PASS.
 - [ ] **Step 5: Commit** `feat(alerts): job runners and multi-channel delivery with retries`.
 
@@ -311,8 +312,9 @@ async def test_health_reports_db_and_redis(client):
 - Produces:
   - `WS /ws?token=<JWT>` — rejects invalid token with close code 4401. On connect subscribes to Redis channels `live:member:{member_id}` and `live:household:{household_id}`; forwards JSON messages.
   - `async def publish_to_member(redis, member_id: int, msg: dict) -> None`; `async def publish_to_household(redis, household_id: int, msg: dict) -> None`; `async def publish_disconnect(redis, member_ids: list[int]) -> None` → publishes `{"kind":"disconnect"}` to each member channel; the socket handler closes with code 4403 on receiving it.
-  - Message kinds: `event`, `alert`, `device_offline`, `device_online`, `disconnect`.
-- [ ] **Step 1: Write failing tests** (Starlette `TestClient` websocket with fakeredis shared): `test_ws_rejects_bad_token_4401`; `test_ws_receives_event_published_to_household`; `test_ws_receives_alert_only_for_own_member`; `test_removed_member_socket_closed_4403` (Review Focus 3: owner removes member → member's open socket closes, then a household event is not received); `test_other_household_receives_nothing`.
+  - Message kinds: `event`, `alert`, `alert_ack`, `device_offline`, `device_online`, `disconnect`.
+  - `POST /alerts/{id}/ack` ("I'm on it") → 200: the alert must belong to the caller (else 404). Sets `acknowledged_by`/`acknowledged_at` on every alert in the household for the same `event_id` that is not yet acknowledged (first acknowledger wins; a second ack → 409 `{"detail":"already handled", "by": email}`), and publishes `{"kind":"alert_ack","event_id","by_member_id","by_email","at"}` to the household. Test alerts (no `event_id`) only acknowledge themselves.
+- [ ] **Step 1: Write failing tests** (Starlette `TestClient` websocket with fakeredis shared): `test_ws_rejects_bad_token_4401`; `test_ws_receives_event_published_to_household`; `test_ws_receives_alert_only_for_own_member`; `test_removed_member_socket_closed_4403` (Review Focus 3: owner removes member → member's open socket closes, then a household event is not received); `test_other_household_receives_nothing`; `test_ack_marks_all_members_alerts_for_event_and_broadcasts`; `test_second_ack_409_names_first_handler`; `test_ack_other_households_alert_404` (also appended to the isolation list).
 - [ ] **Step 2–4:** FAIL → implement → `uv run pytest -q` PASS.
 - [ ] **Step 5: Commit** `feat(live): WebSocket hub over Redis pub/sub`.
 

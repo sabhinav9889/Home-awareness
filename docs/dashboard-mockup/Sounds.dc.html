@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sounds and rules</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F6F7F9}
+a{color:#0F766E}a:hover{color:#115E59}
+</style>
+</helmet>
+<div style="font-family: Inter, system-ui, sans-serif; color: #111827; background: #F6F7F9; min-height: 980px; box-sizing: border-box; padding: 28px 32px 40px;">
+  <div style="max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px;">
+
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;">
+      <a href="Main.dc.html" style="font-size: 14px;">Overview</a>
+      <span aria-hidden="true" style="color: #6B7280;">/</span>
+      <h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 28px; font-weight: 600; flex-grow: 1;">Sounds &amp; rules</h1>
+      <span style="font-size: 14px; color: #4B5563;">Your settings · other members choose their own</span>
+    </header>
+
+    <div style="padding: 14px 18px; border-radius: 12px; background: #E6F4F2; color: #134E4A; font-size: 14px; line-height: 1.5;">
+      Sensors listen only for sounds someone in your household turned on. A rule like <strong>5 times in 60 s</strong> stops a single bark or bang from waking you.
+    </div>
+
+    <sc-for list="{{ groups }}" as="g" hint-placeholder-count="5">
+      <section style="padding: 8px 20px 12px; border-radius: 16px; background: #FFFFFF; border: 1px solid #E3E6EB;">
+        <h2 style="margin: 12px 0 4px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #4B5563;">{{ g.name }}</h2>
+        <sc-for list="{{ g.items }}" as="s" hint-placeholder-count="3">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 12px 0; border-top: 1px solid #EEF0F3;">
+            <button type="button" aria-pressed="{{ s.on }}" aria-label="Alert me for {{ s.label }}" style="{{ s.trackStyle }}"><span style="{{ s.knobStyle }}"></span></button>
+            <div style="flex: 1 1 200px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <span style="font-weight: 600; font-size: 15px;">{{ s.label }}</span>
+              <span style="{{ s.badgeStyle }}">{{ s.rel }}</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 14px; color: #374151; flex-wrap: wrap;">
+              <span>Alert after</span>
+              <span style="min-width: 36px; text-align: center; padding: 8px 10px; border-radius: 8px; border: 1px solid #D1D5DB; background: #FFFFFF; font-weight: 600;">{{ s.repeat }}×</span>
+              <span>in</span>
+              <span style="min-width: 44px; text-align: center; padding: 8px 10px; border-radius: 8px; border: 1px solid #D1D5DB; background: #FFFFFF; font-weight: 600;">{{ s.window }}</span>
+              <span>· quiet for</span>
+              <span style="min-width: 52px; text-align: center; padding: 8px 10px; border-radius: 8px; border: 1px solid #D1D5DB; background: #FFFFFF; font-weight: 600;">{{ s.cooldown }}</span>
+            </div>
+          </div>
+        </sc-for>
+      </section>
+    </sc-for>
+
+    <p style="margin: 0; font-size: 13px; color: #4B5563;">Reliability labels come from testing each sound on recorded clips. Experimental sounds may miss events or fire falsely.</p>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":980}}'>
+class Component extends DCLogic {
+renderVals() {
+  const badge = {
+    good: 'padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #DCFCE7; color: #166534;',
+    fair: 'padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #DBEAFE; color: #1E40AF;',
+    experimental: 'padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #FEF3C7; color: #92400E;'
+  };
+  const row = (label, on, rel, repeat, window, cooldown) => ({
+    label, on: on ? 'true' : 'false', rel, repeat, window, cooldown,
+    badgeStyle: badge[rel],
+    trackStyle: 'flex-shrink: 0; width: 52px; height: 32px; border-radius: 999px; border: 0; padding: 3px; cursor: pointer; display: flex; ' + (on ? 'background: #0F766E; justify-content: flex-end;' : 'background: #CBD5E1; justify-content: flex-start;'),
+    knobStyle: 'width: 26px; height: 26px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0,0,0,.2);'
+  });
+  return {
+    groups: [
+      { name: 'Distress', items: [
+        row('Scream', true, 'good', 1, '60 s', '2 min'),
+        row('Crying', false, 'good', 2, '60 s', '5 min'),
+        row('Shouting', false, 'fair', 1, '60 s', '2 min'),
+        row('Moaning', false, 'experimental', 3, '120 s', '5 min')
+      ]},
+      { name: 'Intrusion', items: [
+        row('Glass breaking', true, 'good', 1, '60 s', '2 min'),
+        row('Dog barking', false, 'good', 5, '60 s', '10 min'),
+        row('Repeated knocking', false, 'fair', 3, '30 s', '5 min')
+      ]},
+      { name: 'Hazard', items: [
+        row('Smoke or fire alarm', true, 'good', 1, '60 s', '2 min'),
+        row('Running water', false, 'fair', 10, '600 s', '30 min')
+      ]},
+      { name: 'Accident', items: [
+        row('Loud thud or fall', false, 'experimental', 1, '60 s', '2 min')
+      ]},
+      { name: 'Household', items: [
+        row('Doorbell', false, 'good', 1, '60 s', '1 min')
+      ]}
+    ]
+  };
+}
+}
+</script>
+</body>
+</html>
