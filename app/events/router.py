@@ -50,9 +50,11 @@ async def post_event(
         )
     )
     await session.flush()
-    outcome: RuleOutcome = await process_event(session, redis, jobs, event, time.time())
+    outcome: RuleOutcome = await process_event(session, redis, event, time.time())
     event.merged = outcome.merged
     await session.commit()
+    for alert_id in outcome.alert_ids:  # after commit: workers must see the rows
+        await jobs.enqueue_alert(alert_id)
     await publish_to_household(
         redis,
         tenant.household_id,

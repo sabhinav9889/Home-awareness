@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 import app.main as app_main  # imports every router/model before create_all
+from app.alerts.jobs import RecordingJobRunner, get_job_runner
 from app.db import Base, get_session
 from app.email import get_email_sender
 from app.redis import get_redis
@@ -118,3 +119,11 @@ async def two_households(signed_up):
     _, headers_a = await signed_up(email="a@example.com", household_name="A")
     _, headers_b = await signed_up(email="b@example.com", household_name="B")
     return headers_a, headers_b
+
+
+@pytest.fixture
+def jobs():
+    runner = RecordingJobRunner()
+    app_main.app.dependency_overrides[get_job_runner] = lambda: runner
+    yield runner
+    app_main.app.dependency_overrides.pop(get_job_runner, None)

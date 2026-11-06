@@ -37,7 +37,7 @@ async def test_event_stored_with_server_receive_time(client, signed_up, session,
     r = await client.post("/device/events", json=_body(occurred_at=occurred), headers=dk)
     assert r.status_code == 202, r.text
     body = r.json()
-    assert body["merged"] is False and body["alerts"] == 0
+    assert body["merged"] is False and body["alerts"] == 1  # scream is on by default
     event = await session.get(Event, body["event_id"])
     assert event.household_id == member.household_id and event.device_id == device_id
     assert event.sound_key == "scream" and event.confidence == 0.9
@@ -131,7 +131,7 @@ async def test_route_reports_rule_outcome(client, signed_up, session, monkeypatc
     _, h = await signed_up()
     _, dk = await _device(client, h)
 
-    async def fake_process(session, redis, jobs, event, now):
+    async def fake_process(session, redis, event, now):
         return events_router.RuleOutcome(merged=True, alert_ids=[1, 2])
 
     monkeypatch.setattr(events_router, "process_event", fake_process)
