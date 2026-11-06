@@ -27,6 +27,7 @@ TENANT_404 = {"detail": "not found"}
 
 HOUSEHOLD_SCOPED_ROUTES: list[tuple[str, str, dict | None]] = [
     ("DELETE", "/households/me/members/{a_member_id}", None),
+    ("DELETE", "/devices/{a_device_id}", None),
 ]
 
 Creator = Callable[..., Awaitable[dict[str, int]]]
@@ -44,11 +45,23 @@ async def create_member(client, headers, outbox, tag) -> dict[str, int]:
     return {"member": r.json()["member_id"]}
 
 
-RESOURCE_CREATORS: list[Creator] = [create_member]
+async def create_device(client, headers, outbox, tag) -> dict[str, int]:
+    """Create a pairing code as the member, pair it, return the new device's id."""
+    r = await client.post(
+        "/devices/pairing-codes", json={"name": f"dev-{tag}", "kind": "pi"}, headers=headers
+    )
+    assert r.status_code == 201, r.text
+    r = await client.post("/device/pair", json={"code": r.json()["code"]})
+    assert r.status_code == 201, r.text
+    return {"device": r.json()["device_id"]}
+
+
+RESOURCE_CREATORS: list[Creator] = [create_member, create_device]
 
 # (path, extractor(json) -> set of ids, resource name)
 LISTING_ROUTES: list[tuple[str, Callable[[dict], set[int]], str]] = [
     ("/households/me", lambda j: {m["id"] for m in j["members"]}, "member"),
+    ("/devices", lambda j: {d["id"] for d in j}, "device"),
 ]
 
 

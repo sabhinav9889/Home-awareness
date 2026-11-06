@@ -12,16 +12,29 @@ from app.db import get_session
 class Tenant:
     """The only sanctioned way to read or write household-owned rows."""
 
-    def __init__(self, member: Member, session: AsyncSession) -> None:
+    def __init__(
+        self, member: Member | None, session: AsyncSession, household_id: int | None = None
+    ) -> None:
+        if member is None and household_id is None:
+            raise ValueError("a Tenant needs a member or a household_id")
         self._member = member
         self._session = session
+        self._household_id = member.household_id if member is not None else household_id
+
+    @classmethod
+    def for_household(cls, household_id: int, session: AsyncSession) -> "Tenant":
+        """A member-less tenant, for device-authenticated code."""
+        return cls(None, session, household_id)
 
     @property
     def household_id(self) -> int:
-        return self._member.household_id
+        assert self._household_id is not None
+        return self._household_id
 
     @property
     def member(self) -> Member:
+        if self._member is None:
+            raise RuntimeError("device tenants have no member")
         return self._member
 
     def select(self, model: Any) -> Select:
