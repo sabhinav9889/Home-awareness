@@ -54,7 +54,7 @@ services:
     restart: unless-stopped
     <<: *app-env
     ports:
-      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+      - "${API_BIND_HOST:-127.0.0.1}:${API_HOST_PORT:-8000}:8000"
     depends_on: *app-deps
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health')"]
