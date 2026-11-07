@@ -71,7 +71,7 @@ async function renderRoute(entry, params, path) {
   } catch (err) {
     if (seq !== renderSeq || err.status === 401) return; // a 401 already went to login
     root.replaceChildren(publicLayout(el("section", { class: "card auth-card" },
-      message(err.detail || String(err), "error"))));
+      message(err.detail || err.message, "error"))));
   }
 }
 

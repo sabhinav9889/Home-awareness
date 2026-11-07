@@ -18,7 +18,7 @@ function onSubmit(form, area, handler) {
     try {
       await handler(new FormData(form));
     } catch (err) {
-      show(area, err.detail || String(err), "error");
+      show(area, err.detail || err.message, "error");
     } finally {
       button.disabled = false;
     }
@@ -112,11 +112,25 @@ export function signupView() {
   return view;
 }
 
+// Take a one-time token out of the address bar and history (a reload must not reuse it).
+function takeToken(params, hash) {
+  const value = params.get("token");
+  if (value) history.replaceState(null, "", location.pathname + location.search + hash);
+  return value;
+}
+
+const confirmations = new Map(); // token -> the single POST for it, whatever re-renders
+
 export async function confirmView(params) {
-  const tokenValue = params.get("token");
-  if (!tokenValue) return card("Confirm your email", message("This link has no token.", "error"));
+  const tokenValue = takeToken(params, "#/confirm");
+  if (!tokenValue) {
+    return card("Confirm your email",
+      el("p", {}, "Open the link from your confirmation email, or log in if you already did."),
+      el("a", { class: "btn", href: "#/login" }, "Log in"));
+  }
+  if (!confirmations.has(tokenValue)) confirmations.set(tokenValue, auth.confirm(tokenValue));
   try {
-    await auth.confirm(tokenValue);
+    await confirmations.get(tokenValue);
   } catch (err) {
     return card("Confirm your email", message(err.detail, "error"),
       el("p", { class: "links" }, "Log in to get a fresh link: ",
@@ -128,7 +142,7 @@ export async function confirmView(params) {
 }
 
 export function resetView(params) {
-  const tokenValue = params.get("token");
+  const tokenValue = takeToken(params, "#/reset");
   const area = el("div", { class: "msgs" });
   if (!tokenValue) {
     const form = el("form", { class: "stack", novalidate: true },

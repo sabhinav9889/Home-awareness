@@ -24,6 +24,7 @@ def _signup_and_confirm(page, live, email, household="Maple House"):
     assert "/app/#/confirm?token=" in link
     page.goto("/app/#/confirm?token=" + link.split("token=")[1])
     expect(page.get_by_text("Email confirmed")).to_be_visible()
+    assert "token=" not in page.url
 
 
 def _login(page, email, password=PW):
@@ -106,6 +107,8 @@ def test_reset_password_flow(page, live):
     link = live.outbox[-1].body.split("\n")[1]
     assert "/app/#/reset?token=" in link
     page.goto("/app/#/reset?token=" + link.split("token=")[1])
+    expect(page.get_by_label("New password", exact=True)).to_be_visible()
+    assert "token=" not in page.url
     page.get_by_label("New password", exact=True).fill("another-horse-2")
     page.get_by_role("button", name="Set password").click()
     expect(page.get_by_role("status")).to_contain_text("Password changed")
@@ -119,3 +122,10 @@ def test_household_name_is_text_not_html(page, live):
     _login(page, email)
     expect(page.get_by_text("<img src=x onerror=alert(1)>").first).to_be_visible()
     assert page.locator("img[src=x]").count() == 0
+
+
+def test_reload_after_confirm_shows_no_error(page, live):
+    _signup_and_confirm(page, live, _email())
+    page.reload()
+    expect(page.get_by_role("heading", name="Confirm your email")).to_be_visible()
+    assert page.get_by_role("alert").count() == 0

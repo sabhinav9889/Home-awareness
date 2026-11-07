@@ -15,7 +15,12 @@ export function token() {
 
 export async function login(email, password) {
   const { access_token } = await request("POST", "/auth/login", { email, password });
-  sessionStorage.setItem(KEY, access_token);
+  try {
+    sessionStorage.setItem(KEY, access_token);
+  } catch {
+    throw new Error("This browser blocks session storage, so you can't stay logged in. " +
+      "Allow site data for this page (or leave private mode) and try again.");
+  }
 }
 
 export function logout(msg) {
