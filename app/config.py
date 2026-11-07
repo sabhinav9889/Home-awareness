@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 from typing import Literal
 
@@ -6,10 +7,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MIN_JWT_SECRET_LEN = 32
 WEAK_JWT_SECRETS = {"change-me", "changeme", "secret", "dev", "ci-secret"}
+# Telegram's rule for setWebhook `secret_token`; the same value is the webhook path secret.
+TELEGRAM_SECRET_RE = re.compile(r"[A-Za-z0-9_-]{1,256}")
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # hide_input_in_errors: a rejected secret must not be echoed into startup logs.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
 
     database_url: str
     redis_url: str
@@ -36,6 +40,19 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"JWT_SECRET must be a random string of at least {MIN_JWT_SECRET_LEN} "
                 "characters; generate one with "
+                'python -c "import secrets;print(secrets.token_urlsafe(48))"'
+            )
+        return v
+
+    @field_validator("telegram_webhook_secret")
+    @classmethod
+    def _telegram_secret_charset(cls, v: str | None) -> str | None:
+        if not v:  # Compose passes "" when unset: Telegram stays disabled
+            return None
+        if not TELEGRAM_SECRET_RE.fullmatch(v):
+            raise ValueError(
+                "TELEGRAM_WEBHOOK_SECRET may only contain A-Z a-z 0-9 _ - (1-256 characters), "
+                "Telegram's rule for setWebhook secret_token; generate one with "
                 'python -c "import secrets;print(secrets.token_urlsafe(48))"'
             )
         return v

@@ -21,6 +21,15 @@ Generate a secret with `python -c "import secrets;print(secrets.token_urlsafe(48
 
 Configuration is environment variables only (see `.env.example` and `app/config.py`). `JOB_RUNNER=celery` (default, used by Compose) sends alert delivery to the worker; `inprocess` runs it inside the API process, for hosts without a worker.
 
+## Upgrading to 1b
+
+If you ran an earlier version:
+
+1. **Migrate the database:** `alembic upgrade head` (Compose's one-shot `migrate` service does this on `docker compose up`; outside Compose run `uv run alembic upgrade head`).
+2. **Telegram:** the server now also requires Telegram's `X-Telegram-Bot-Api-Secret-Token` header, so re-run the `setWebhook` call from [Telegram bot](#telegram-bot-optional) step 4 **with** `secret_token=<SECRET>`; until you do, Telegram updates (linking) are rejected. `TELEGRAM_WEBHOOK_SECRET` may now only contain `A-Z a-z 0-9 _ -` (1–256 characters) and the server refuses to start with any other character; if yours has others, pick a new one and update both `.env` and the webhook.
+3. **Laptop agents:** re-run `ha-agent login` on each laptop to replace the old 24-hour login with a long-lived agent token (old configs keep working until they expire, then `ha-agent run` asks you to log in again).
+4. **Sensors:** already-paired `ha-sensor` laptops keep working; nothing to do.
+
 ## Laptop sensor and alert agent
 
 [`edge/`](edge/README.md) is a separate Python package with two commands for Linux laptops (PipeWire): `ha-sensor` turns a laptop into a sound sensor (pair it with a code from `POST /devices/pairing-codes`; it runs YAMNet locally and sends only the sound type, a confidence and a time), and `ha-agent` shows your alerts as desktop popups and plays an alarm through your headphones. Setup, exit codes and caveats: [edge/README.md](edge/README.md). Per-sound accuracy measurements: [docs/accuracy.md](docs/accuracy.md).
@@ -32,7 +41,7 @@ Configuration is environment variables only (see `.env.example` and `app/config.
 3. In `.env` set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME` and `TELEGRAM_WEBHOOK_SECRET`, then restart the stack.
 4. Point Telegram at your server (it must be reachable over HTTPS, e.g. via a tunnel):
    `curl "https://api.telegram.org/bot<TOKEN>/setWebhook" --data-urlencode "url=<PUBLIC_BASE_URL>/telegram/webhook/<SECRET>" --data-urlencode "secret_token=<SECRET>"`
-   Telegram then sends the secret back in the `X-Telegram-Bot-Api-Secret-Token` header on every update; the server rejects (404) any request without both the path secret and that header. The secret may only contain `A-Z a-z 0-9 _ -` (Telegram's rule for `secret_token`), so pick one that does. If you set the webhook before this header check existed, run the call again.
+   Telegram then sends the secret back in the `X-Telegram-Bot-Api-Secret-Token` header on every update; the server rejects (404) any request without both the path secret and that header. The secret may only contain `A-Z a-z 0-9 _ -`, 1–256 characters (Telegram's rule for `secret_token`); the server refuses to start with any other character. `python -c "import secrets;print(secrets.token_urlsafe(48))"` makes a suitable one. If you set the webhook before this header check existed, run the call again.
 5. Signed in, call `POST /me/telegram/link` to get a link, open it in Telegram and press Start.
 
 The bot token and webhook secret are kept out of logs.
