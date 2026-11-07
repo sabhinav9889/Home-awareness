@@ -1,6 +1,6 @@
 # Overnight report — 7 Nov 2026
 
-**TL;DR:** Three plans built, reviewed and merged into your local `main` (nothing pushed): the server core, the laptop sensor + alert agent, and six enhancements. 277 server tests + 260 edge tests pass. A fourth plan (the web dashboard) was written and started; it's on branch `plan-3-dashboard`, unmerged. Every decision I made for you is listed below with what it costs if I got it wrong.
+**TL;DR (updated after the dashboard):** Four plans built, reviewed and merged into your local `main` (nothing pushed): the server core, the laptop sensor + alert agent, and six enhancements. 277 server tests + 260 edge tests pass. The web dashboard (Plan 3) was finished after you woke and is merged too. Every decision I made for you is listed below with what it costs if I got it wrong.
 
 ### Start here (10 minutes)
 1. `cd ~/home-awareness && git log --oneline | head -40` — the night's work, one focused commit per change.
@@ -101,17 +101,26 @@ Each is something the plan/spec didn't settle; "cost if wrong" in brackets.
 26–27. No "offline" warnings right after the server itself was down; a home whose only sensor or internet died is still warned, after ~13 min instead of 3.
 28. Ran one extra targeted fix round beyond the normal process, because two bugs found at the end would have misled users.
 
-### 🚧 Plan 3 — web dashboard: written, started, NOT merged
-`docs/superpowers/plans/2026-11-07-plan-3-dashboard.md` (6 tasks, plain JavaScript, no frameworks, browser-tested with your installed Chrome). A usage limit paused work from ~05:50 to 09:00; Task 1 (shell, login/sign-up, test harness) was resumed with a 09:25 deadline — see the branch `plan-3-dashboard` and the line below for where it stopped.
-- **Task 1 done and reviewed** (commits `26cd110`, `f2b8e33`): `/app/` serves the dashboard shell; sign-up (with your browser's timezone), email confirm, login, password reset, log out; strict Content-Security-Policy; one-time links are wiped from the address bar after use. **292 tests pass, including 8 real-browser tests in your Chrome.**
-- Tasks 2–6 (overview + live events, alert screen + "I'm on it", sounds & rules, sensors/channels/household, dark mode + phone-width audit) not started — I stopped at 09:17 so nothing would be half-done at 10:00. The branch is clean and green; resume with Task 2.
+### ✅ Plan 3 — web dashboard: done, reviewed, merged into `main` (finished after you woke, local only)
+`docs/superpowers/plans/2026-11-07-plan-3-dashboard.md` — 6 tasks + final review + fix wave. Open it at `http://localhost:8000/app/` after `docker compose up`. **393 server tests (including 115 real-Chrome browser tests) + 260 edge tests pass.** Screenshots: `docs/screenshots/` (linked from `README.md`).
+- Plain JavaScript, no frameworks or third-party scripts; strict Content-Security-Policy; login token only in the tab's session storage; works at phone width and in dark mode.
+- Pages: Overview (status, sensors, live events), Sounds & rules, Sensors (pairing codes), Alert channels (Telegram, ntfy, test alert, browser notifications, laptop agents), Household (timezone, invites, members), plus sign-up / confirm / reset / join.
+- **Alert screen on every page:** full-screen "Scream — Living room" with "I'm on it"; another member's "I'm on it" shows "X is handling it"; alerts missed while the browser was offline (last 10 min, unacknowledged) appear on reconnect; no single stray key can acknowledge or dismiss it.
+- Reviews caught: a stray key press could have acknowledged an alert for the whole household and silenced everyone; one-time login links stayed in the address bar; the page could hammer the server with reconnects; invite links pointed to a page that didn't exist; one screenshot was of the wrong page (I caught that one myself).
+
+## Rulings I made on your behalf (Plan 3)
+1. Only one builder runs tests at a time on the shared test database (later replaced by a lock that makes test runs take turns). [none]
+2. Added a "join household" page because invite links were broken without it.
+3. The last polish task was reviewed as part of the final review instead of separately. [issues found one stage later — none were]
+4. Escape no longer closes the alert screen; buttons are inactive for 0.6 s after an alert appears. [slightly slower to dismiss by keyboard]
+5. Unacknowledged alerts from the last 10 minutes reappear after a reconnect or reload, even if you dismissed them in that tab. [a dismissed test alert can pop up again after a reload]
 
 ### What I did NOT do (by your limits)
 No push, no GitHub repo, no cloud accounts, no Oracle/Render setup, no Telegram bot, nothing paid, your other projects untouched, your system audio settings untouched.
 
 ## Suggested next steps
 1. Review and push when you're happy (personal GitHub `sabhinav9889`); the commit trailers name the model that wrote each commit.
-2. Finish Plan 3 (dashboard) — 5 tasks left after Task 1.
+2. Dashboard follow-ups (small): reconcile an on-screen alert that someone handled while you were offline; avoid a double screen-reader announcement; server-side 10-minute window for catch-up.
 3. Plan 4 (deployment: Oracle Always Free + Caddy + DuckDNS + backups + the no-card fallback) — not written yet; needs you for account sign-ups.
 4. Later: phone-as-sensor page (needs a browser build of YAMNet), Home Assistant/MQTT bridge, "catch up on missed alerts after reconnect" for the laptop agent.
 5. The full list of small deferred review notes is in `.superpowers/backlog-*.md` (local, git-ignored).
