@@ -46,6 +46,7 @@ class AlertOut(BaseModel):
     device_name: str | None
     created_at: datetime
     status: str
+    acknowledged_by: int | None  # the member who said "I'm on it" (for its whole event)
     deliveries: list[DeliveryOut]
 
 
@@ -92,6 +93,7 @@ async def list_alerts(
             device_name=name,
             created_at=a.created_at,
             status=a.status,
+            acknowledged_by=a.acknowledged_by,
             deliveries=[DeliveryOut(**_d(d)) for d in by_alert[a.id]],
         )
         for a, name in rows

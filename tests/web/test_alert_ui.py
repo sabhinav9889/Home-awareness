@@ -13,6 +13,7 @@ import fakeredis.aioredis
 import httpx
 import pytest
 from playwright.sync_api import expect
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -560,3 +561,64 @@ def test_buttons_are_guarded_for_600ms_whenever_the_shown_alert_changes(new_page
     # Dismiss with a deliberate click still works
     _button(page, "Dismiss").click()
     expect(_screen(page).get_by_role("heading")).to_have_text("Glass breaking")
+
+
+def _backdate(alert_id, minutes):
+    async def go():
+        engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE alerts SET created_at = created_at - make_interval(mins => :m) "
+                     "WHERE id = :id"),
+                {"m": minutes, "id": alert_id},
+            )  # fmt: skip
+        await engine.dispose()
+
+    _run(go())
+
+
+def _gated_socket(page):
+    """Route /ws: while `gate['open']` is False a socket is mocked (open, but silent)."""
+    gate = {"open": False, "sockets": []}
+
+    def handler(ws):
+        gate["sockets"].append(ws)
+        if gate["open"]:
+            ws.connect_to_server()
+
+    page.route_web_socket(re.compile(r"/ws\?"), handler)
+    return gate
+
+
+def test_alerts_missed_while_offline_appear_on_reconnect(new_page, live):
+    page = _page(new_page)
+    gate = _gated_socket(page)
+    m = _member(live)
+    _prefs(live, m, alarm=True)
+    old_dev, acked_dev, fresh_dev = (_device(live, m, n) for n in ("Attic", "Porch", "Hall"))
+    _login(page, m)  # "live", but the socket hears nothing
+    _, [old] = _event(live, old_dev, "smoke_alarm")
+    _backdate(old, 11)  # older than 10 minutes: never resurrected
+    _, [acked] = _event(live, acked_dev, "scream")
+    assert httpx.post(f"{live.base_url}/alerts/{acked}/ack", headers=m.headers).status_code == 200
+    _, [fresh] = _event(live, fresh_dev, "glass_breaking")
+    _deliver(live, fresh)  # nobody is listening: missed
+    expect(_screen(page)).to_have_count(0)
+
+    gate["open"] = True
+    gate["sockets"][-1].close()  # the socket drops; the app reconnects for real
+    screen = _screen(page)
+    expect(screen.get_by_role("heading")).to_have_text("Glass breaking")
+    expect(screen).to_contain_text("Hall")
+    expect(page.locator(".alert-more")).to_have_count(0)  # just the one
+    page.wait_for_function("window.__audio.started > 0")  # alarm on, tab visible
+    _button(page, "Dismiss").click()
+    expect(screen).to_have_count(0)
+
+    # another reconnect: an alert already shown here doesn't come back
+    sockets = len(gate["sockets"])
+    with page.expect_response(re.compile(r"/alerts(\?|$)")):
+        gate["sockets"][-1].close()
+    assert len(gate["sockets"]) == sockets + 1
+    page.evaluate("new Promise(requestAnimationFrame)")
+    expect(screen).to_have_count(0)

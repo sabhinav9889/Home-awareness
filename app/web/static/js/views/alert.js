@@ -7,6 +7,11 @@
 // it"; my own ack (from another tab or device) just closes it. Acks for anything else are
 // ignored. Server strings only ever become text nodes.
 //
+// Catch-up: alerts sent while the socket was down are lost to it, so on every transition to
+// "live" (first connect included) the screen asks GET /alerts and shows the ones from the
+// last CATCH_UP_MS nobody has acknowledged and this tab hasn't seen, with the member's current
+// popup/alarm preferences. Older alerts are never resurrected.
+//
 // Stray keys (P3-R4): someone typing or half-asleep must not clear an alarm screen. When the
 // screen appears or its shown alert changes, focus goes to the dialog itself (not a button),
 // every button stays disabled for GUARD_MS, and Escape does nothing: acknowledging or
@@ -21,6 +26,7 @@ const KEEP_QUEUED = 50; // bound for a tab left open while many alerts pile up
 const KEEP_SEEN = 500;
 const UNREACHABLE = "Couldn't reach the server — try again";
 const GUARD_MS = 600;
+const CATCH_UP_MS = 10 * 60_000;
 
 let queue = []; // oldest first; the screen shows the last one
 const seen = new Set(); // alert ids already handled here (a duplicate message is ignored)
@@ -34,6 +40,7 @@ let guardTimer = null;
 let stopBeep = null;
 let beepKey = null;
 let subscribed = false;
+let generation = 0; // bumped by reset(): a catch-up that started before a logout is dropped
 
 function validTimeZone(tz) {
   try {
@@ -55,12 +62,13 @@ export function start({ timezone } = {}) {
   }
   if (!subscribed) {
     subscribed = true;
-    subscribe({ onMessage });
+    subscribe({ onMessage, onStatus: (status) => { if (status === "live") catchUp(); } });
   }
 }
 
 // On logout (any public view): forget everything, close the screen.
 export function reset() {
+  generation += 1;
   for (const item of queue) closeNote(item);
   queue = [];
   seen.clear();
@@ -77,13 +85,43 @@ function onMessage(msg) {
 
 const keyOf = (eventId, alertId) => (eventId == null ? `a${alertId}` : `e${eventId}`);
 
+async function catchUp() {
+  const mine = generation;
+  let alerts;
+  let prefs;
+  try {
+    [alerts, prefs] = await Promise.all([
+      request("GET", "/alerts"), request("GET", "/me/alert-preferences"),
+    ]);
+  } catch {
+    return; // offline again or logged out: the next "live" tries again
+  }
+  if (mine !== generation || !Array.isArray(alerts)) return;
+  const since = Date.now() - CATCH_UP_MS;
+  const missed = alerts.filter((a) => a.acknowledged_by == null && !seen.has(a.id)
+    && Date.parse(a.created_at) >= since).reverse(); // oldest first: the newest ends on top
+  let added = null;
+  for (const a of missed) {
+    added = onAlert({
+      alert_id: a.id, event_id: a.event_id, label: a.label, device_name: a.device_name,
+      at: a.created_at, popup: prefs.popup || prefs.alarm, alarm: false, // one beep, below
+    }) || added;
+  }
+  if (added && prefs.alarm) {
+    silence();
+    stopBeep = startBeep(); // only while the tab is visible
+    beepKey = added.key;
+  }
+}
+
+// Returns the new queue item, or null if the message added nothing.
 function onAlert(msg) {
-  if (!msg.popup && !msg.alarm) return; // an alarm needs a screen to stop it from
-  if (seen.has(msg.alert_id)) return;
+  if (!msg.popup && !msg.alarm) return null; // an alarm needs a screen to stop it from
+  if (seen.has(msg.alert_id)) return null;
   seen.add(msg.alert_id);
   if (seen.size > KEEP_SEEN) seen.delete(seen.values().next().value);
   const key = keyOf(msg.event_id, msg.alert_id);
-  if (queue.some((i) => i.key === key)) return;
+  if (queue.some((i) => i.key === key)) return null;
   const item = {
     key,
     alertId: msg.alert_id,
@@ -108,6 +146,7 @@ function onAlert(msg) {
     beepKey = key;
   }
   render();
+  return item;
 }
 
 async function onAck(msg) {

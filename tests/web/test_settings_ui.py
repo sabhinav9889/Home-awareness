@@ -164,7 +164,11 @@ def test_send_test_alert_shows_the_alert_screen(new_page, live):
 def test_test_alert_rate_limit_shows_retry_after(page, live):
     m = _member(live)
     for _ in range(3):
-        assert httpx.post(f"{live.base_url}/me/test-alert", headers=m.headers).status_code == 202
+        r = httpx.post(f"{live.base_url}/me/test-alert", headers=m.headers)
+        assert r.status_code == 202
+        # handled, so the alert screen's catch-up (unacked alerts < 10 min) leaves them out
+        ack = httpx.post(f"{live.base_url}/alerts/{r.json()['alert_id']}/ack", headers=m.headers)
+        assert ack.status_code == 200
     _open(page, m, "#/channels")
     page.get_by_role("button", name="Send me a test alert").click()
     expect(page.locator(".test-alert-msg")).to_have_text(re.compile(r"Try again in \d+ s"))
