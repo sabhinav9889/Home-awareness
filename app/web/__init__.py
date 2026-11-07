@@ -10,7 +10,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; style-src 'self' https://fonts.googleapis.com; "
-        "font-src https://fonts.gstatic.com; connect-src 'self' ws: wss:; img-src 'self' data:; "
+        "font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self' data:; "
         "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
     ),
     "X-Content-Type-Options": "nosniff",
