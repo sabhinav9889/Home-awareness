@@ -592,3 +592,62 @@ def test_agent_relogin_to_another_server_revokes_nothing(cfgdir, monkeypatch):
     )
     assert cli.agent_main(["login", "--server", "http://srv", "--email", "a@b.c"]) == 0
     assert not other.called
+
+
+# --- M2: save first, then revoke ------------------------------------------------------
+
+
+@respx.mock
+def test_agent_relogin_saves_the_new_token_before_revoking_the_old(cfgdir, monkeypatch):
+    from ha_edge import config
+
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": PASSWORD)
+    config.save_agent(
+        config.AgentConfig("http://srv", "a@b.c", agent_token="ha_agent_old", agent_token_id=5)
+    )
+    _relogin_mocks()
+    seen = []
+
+    def at_revoke(request):
+        seen.append(json.loads((cfgdir / "agent.json").read_text())["agent_token"])
+        return httpx.Response(204)
+
+    respx.delete("http://srv/me/agent-tokens/5").mock(side_effect=at_revoke)
+    assert cli.agent_main(["login", "--server", "http://srv", "--email", "a@b.c"]) == 0
+    assert seen == [AGENT_TOKEN]  # the new token was on disk when the old one was revoked
+
+
+@respx.mock
+@pytest.mark.parametrize("revoke_new", [httpx.Response(204), httpx.ConnectError("refused")])
+def test_agent_relogin_save_failure_revokes_the_new_token_and_keeps_the_old(
+    cfgdir, monkeypatch, capsys, revoke_new
+):
+    from ha_edge import config
+
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": PASSWORD)
+    config.save_agent(
+        config.AgentConfig("http://srv", "a@b.c", agent_token="ha_agent_old", agent_token_id=5)
+    )
+    before = (cfgdir / "agent.json").read_text()
+    _relogin_mocks()
+    old = respx.delete("http://srv/me/agent-tokens/5").mock(return_value=httpx.Response(204))
+    new = respx.delete("http://srv/me/agent-tokens/12")
+    if isinstance(revoke_new, Exception):
+        new.mock(side_effect=revoke_new)
+    else:
+        new.mock(return_value=revoke_new)
+
+    def disk_full(cfg):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(config, "save_agent", disk_full)
+    assert cli.agent_main(["login", "--server", "http://srv", "--email", "a@b.c"]) == 1
+    assert new.called  # no orphaned live token on the server
+    assert new.calls[0].request.headers["authorization"] == f"Bearer {JWT}"
+    assert not old.called  # the stored login still works
+    assert (cfgdir / "agent.json").read_text() == before
+    out = capsys.readouterr()
+    assert "cannot save" in out.err.lower() and "No space left on device" in out.err
+    assert "Logged in" not in out.out
+    for secret in (JWT, PASSWORD, AGENT_TOKEN, "ha_agent_old"):
+        assert secret not in out.out + out.err

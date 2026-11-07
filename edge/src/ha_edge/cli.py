@@ -293,27 +293,49 @@ def _finish_login(http: Any, base: str, email: str, r: Any) -> int:
         if me.status_code == 200:
             mid = me.json().get("id")
             member_id = mid if isinstance(mid, int) and not isinstance(mid, bool) else None
-    _revoke_previous_token(http, base, auth)
-    config.save_agent(
-        config.AgentConfig(
-            base, email, member_id=member_id, agent_token=agent_token, agent_token_id=agent_token_id
+    # Save first, revoke after: if the save fails the stored login must still work, and the
+    # new token must not be left live on the server with nothing holding it.
+    previous_id = _previous_token_id(base)
+    try:
+        config.save_agent(
+            config.AgentConfig(
+                base,
+                email,
+                member_id=member_id,
+                agent_token=agent_token,
+                agent_token_id=agent_token_id,
+            )
         )
-    )
+    except OSError as e:
+        _revoke_token(http, base, auth, agent_token_id)
+        _err(f"Login failed: cannot save the login in {config.config_dir()}: {e.strerror or e}.")
+        return EXIT_ERROR
+    _revoke_token(http, base, auth, previous_id)
     print(f"Logged in as {email}. Now run `ha-agent run`.")
     return EXIT_OK
 
 
-def _revoke_previous_token(http: Any, base: str, auth: dict[str, str]) -> None:
-    """Best effort: a re-login replaces the stored agent token, so revoke the old one on the
-    server instead of leaving it live. Any failure is ignored; nothing is printed."""
-    import httpx
-
+def _previous_token_id(base: str) -> int | None:
+    """The stored agent token's id, if it belongs to this server; None on any config problem."""
     from ha_edge import config
 
-    with contextlib.suppress(config.ConfigError, httpx.HTTPError):
+    with contextlib.suppress(config.ConfigError, OSError):
         old = config.load_agent()
-        if old is not None and old.agent_token_id is not None and old.base_url == base:
-            http.delete(f"{base}/me/agent-tokens/{old.agent_token_id}", headers=auth)
+        if old is not None and old.base_url == base:
+            return old.agent_token_id
+    return None
+
+
+def _revoke_token(http: Any, base: str, auth: dict[str, str], token_id: int | None) -> None:
+    """Best effort: a re-login replaces the stored agent token, so revoke the replaced one (or
+    the new one, if it could not be saved) instead of leaving it live. Any failure is
+    ignored; nothing is printed."""
+    import httpx
+
+    if token_id is None:
+        return
+    with contextlib.suppress(httpx.HTTPError):
+        http.delete(f"{base}/me/agent-tokens/{token_id}", headers=auth)
 
 
 def _cmd_agent_run(args: argparse.Namespace) -> int:

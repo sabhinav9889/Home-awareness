@@ -95,6 +95,9 @@ most in a row).
   (named "`<hostname>` agent") and stores only that token and your member id in
   `agent.json` (mode 0600). The password and the short-lived login are never stored, and
   no token is ever printed or logged. You do not need to log in again every day.
+- Logging in again on the same laptop saves the new token first and then revokes the old
+  one on the server. If the new token cannot be saved (disk full, permissions), `login`
+  revokes the new token, keeps the old login working and exits 1.
 - The agent token is narrow: it only opens the live alert connection and sends "I'm on it".
   Every other API call refuses it. Each account can have up to 10 active agent tokens.
 - **Revoke** a laptop's token (lost laptop, uninstall) until the dashboard has a button:
