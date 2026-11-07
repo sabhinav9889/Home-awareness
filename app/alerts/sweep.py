@@ -21,7 +21,13 @@ SWEEP_INTERVAL_S = 300
 
 async def sweep_stale_alerts(session: AsyncSession, now: datetime) -> int:
     """Fail alerts older than STALE_AFTER that never finished, and their pending deliveries.
-    Cross-household sweep (sanctioned Tenant bypass). One transaction; returns the count."""
+    Cross-household sweep (sanctioned Tenant bypass). One transaction; returns the count.
+
+    Race, intended: a worker that is still delivering (very slow, not dead) may finish after
+    this sweep and overwrite failed -> sent/partial on the alert and its deliveries. That is
+    the truth (the message did go out), and nothing is ever re-sent either way, so
+    at-most-once holds; the sweep only exists so a dead worker can't leave an alert looking
+    in-flight forever."""
     ids = (
         await session.scalars(
             update(Alert)
