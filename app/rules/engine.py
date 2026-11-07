@@ -63,10 +63,12 @@ async def _merge_state(redis: Redis, event: Event) -> tuple[bool, float]:
 
 
 async def process_event(
-    session: AsyncSession, redis: Redis, event: Event, now: float
+    session: AsyncSession, redis: Redis, event: Event, now: float, merge: bool = True
 ) -> RuleOutcome:
+    """`merge=False` skips the cross-device merge window (server-raised incidents, which are
+    already one event per room); thresholds, repeats and cooldowns still apply."""
     hid, sound = event.household_id, event.sound_key
-    merged, prev_max = await _merge_state(redis, event)
+    merged, prev_max = await _merge_state(redis, event) if merge else (False, float("-inf"))
     if merged:
         event.merged = True
 

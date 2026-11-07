@@ -272,3 +272,87 @@ async def test_incident_failure_never_breaks_the_ingredient_response(
     assert r.status_code == 202 and r.json()["alerts"] == 1
     assert "RuntimeError" in caplog.text and "secret detail" not in caplog.text
     assert time.time() > 0
+
+
+async def test_incident_failure_after_sql_keeps_ingredient_body_and_keys(
+    client, session, redis, signed_up, monkeypatch
+):
+    """A real SQL call, then a failure: the rollback expires the ingredient event, but the
+    response (built before) is intact, no incident row is left, and the NX key is undone."""
+    import app.rules.incidents as incidents
+
+    member, h = await signed_up()
+    hid = member.household_id  # read now: the rollback under test expires `member`
+    room = await _room(client, h, "Hall")
+    dev, mic = await _device(client, h, room_id=room)
+    real = incidents.process_event
+
+    async def boom(sess, *a, **k):
+        await sess.get(Household, hid, populate_existing=True)
+        raise RuntimeError("late failure")
+
+    def ev(t):
+        return {"type": t, "confidence": 0.95, "occurred_at": datetime.now(UTC).isoformat()}
+
+    monkeypatch.setattr(incidents, "process_event", boom)
+    r1 = await client.post("/device/events", json=ev("glass_breaking"), headers=mic)
+    r2 = await client.post("/device/events", json=ev("person_away"), headers=mic)
+    assert r2.status_code == 202, r2.text
+    body = r2.json()
+    assert body["event_id"] > r1.json()["event_id"] and body["merged"] is False
+    assert body["alerts"] == 1
+    assert await _incident_events(session) == []
+    assert await redis.get(f"incfired:{hid}:{room}:incident_break_in") is None
+    # the key was undone, so the next completing event can still raise it
+    monkeypatch.setattr(incidents, "process_event", real)
+    r3 = await client.post("/device/events", json=ev("glass_breaking"), headers=mic)
+    assert r3.status_code == 202
+    assert len(await _incident_events(session, "incident_break_in")) == 1
+
+
+async def test_commit_failure_after_incident_keeps_ingredient_body(
+    client, session, redis, signed_up, monkeypatch
+):
+    member, h = await signed_up()
+    hid = member.household_id
+    room = await _room(client, h, "Hall")
+    _, mic = await _device(client, h, room_id=room)
+
+    def ev(t):
+        return {"type": t, "confidence": 0.95, "occurred_at": datetime.now(UTC).isoformat()}
+
+    await client.post("/device/events", json=ev("glass_breaking"), headers=mic)
+    real_commit = session.commit
+    calls = []
+
+    async def commit():  # the 1st commit is the ingredient's; the 2nd is the incident's
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("commit failed")
+        await real_commit()
+
+    monkeypatch.setattr(session, "commit", commit)
+    r = await client.post("/device/events", json=ev("person_away"), headers=mic)
+    assert r.status_code == 202 and r.json()["alerts"] == 1 and "event_id" in r.json()
+    assert len(calls) == 2
+    assert await redis.get(f"incfired:{hid}:{room}:incident_break_in") is None
+
+
+async def test_incidents_in_two_rooms_within_5s_both_alert(client, session, redis, signed_up):
+    member, h = await signed_up()
+    body = {"enabled": True, "repeat_count": 1, "window_s": 60, "cooldown_s": 0}
+    r = await client.put("/me/sound-settings/incident_break_in", json=body, headers=h)
+    assert r.status_code == 200, r.text
+    hid = member.household_id
+    out = []
+    for i, name in enumerate(("A", "B")):
+        room = await _room(client, h, name)
+        dev, _ = await _device(client, h, f"D{name}", room_id=room)
+        await _feed(session, redis, hid, dev, "glass_breaking", i)
+        _, ids = await _feed(session, redis, hid, dev, "person_away", i + 1)
+        out += ids
+        # per-member cooldown still applies by design (it lasts at least 1 s): clear it so
+        # this test isolates the cross-device merge, which incidents bypass
+        await redis.delete(f"cd:{hid}:{member.id}:incident_break_in")
+    assert len(out) == 2
+    assert not any(e.merged for e in await _incident_events(session, "incident_break_in"))

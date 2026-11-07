@@ -28,6 +28,7 @@ from app.snapshots.models import Snapshot
 KEEP_S = 30
 FIRE_ONCE_S = 60
 NEW_FILES = "incident_snapshot_files"
+NX_KEYS = "incident_nx_keys"  # session.info: keys this call set, undone on failure
 FIRED = "incident_fired"  # session.info flag: an incident row is pending a commit
 
 
@@ -113,10 +114,10 @@ async def check_incidents(
             break_in_completed = True
         if rule.needs_guarding and not guarding:
             continue
-        if not await redis.set(
-            f"incfired:{hid}:{device.room_id}:{rule.key}", 1, nx=True, ex=FIRE_ONCE_S
-        ):
+        nx_key = f"incfired:{hid}:{device.room_id}:{rule.key}"
+        if not await redis.set(nx_key, 1, nx=True, ex=FIRE_ONCE_S):
             continue
+        session.info.setdefault(NX_KEYS, []).append(nx_key)
         ingredients = [[event.sound_key, event.id, event.confidence, has_snapshot], *partners]
         alert_ids += await _fire(session, redis, rule, event, ingredients, now)
     return alert_ids
@@ -155,5 +156,5 @@ async def _fire(
             copy = await store.save(session, trigger.household_id, incident.id, jpeg)
             if copy is not None:  # so a failed commit can remove the new file
                 session.info.setdefault(NEW_FILES, []).append(copy.path)
-    outcome = await process_event(session, redis, incident, now)
+    outcome = await process_event(session, redis, incident, now, merge=False)
     return outcome.alert_ids

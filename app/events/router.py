@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import time
 from datetime import UTC, datetime
@@ -24,7 +23,7 @@ from app.metrics import ALERTS_CREATED, EVENTS_MERGED, EVENTS_RECEIVED
 from app.ratelimit import by_device_key, enforce, rate_limit
 from app.redis import get_redis
 from app.rules.engine import RuleOutcome, process_event
-from app.rules.incidents import FIRED, NEW_FILES, check_incidents
+from app.rules.incidents import FIRED, NEW_FILES, NX_KEYS, check_incidents
 from app.snapshots import store
 from app.tenancy import Tenant, get_tenant
 
@@ -182,36 +181,52 @@ async def post_event(
             "has_snapshot": snapshot is not None,
         },
     )
+    # Read before the incident step: a rollback there expires `event`.
+    accepted = EventAccepted(event_id=event.id, merged=event.merged, alerts=len(outcome.alert_ids))
     await _raise_incidents(session, redis, jobs, event)
-    return EventAccepted(event_id=event.id, merged=event.merged, alerts=len(outcome.alert_ids))
+    return accepted
 
 
 async def _raise_incidents(
     session: AsyncSession, redis: Redis, jobs: JobRunner, event: Event
 ) -> None:
     """Follow-up incidents, after the ingredient is committed and enqueued. Own commit, own
-    enqueue; any failure is logged by type only and never touches the ingredient's response."""
+    enqueue; any failure is logged by type only and never touches the ingredient's response
+    (callers must not read `event` afterwards: a rollback expires it)."""
+    session.info.pop(FIRED, None)
+    session.info.pop(NEW_FILES, None)
+    session.info.pop(NX_KEYS, None)
     try:
-        session.info.pop(FIRED, None)
         alert_ids = await check_incidents(session, redis, event, time.time())
         if not session.info.pop(FIRED, False):
             return  # nothing was raised: nothing to commit
-        try:
-            await session.commit()
-        except BaseException:
-            store.forget_deferred_files(session)
-            for path in session.info.pop(NEW_FILES, []):
-                await asyncio.to_thread(store._remove_file, path)
-            raise
+        await session.commit()
         session.info.pop(NEW_FILES, None)
+        session.info.pop(NX_KEYS, None)
         await store.delete_deferred_files(session)
         for alert_id in alert_ids:
             ALERTS_CREATED.labels("incident").inc()
             await enqueue_or_fallback(jobs, alert_id)
     except Exception as e:  # noqa: BLE001
         log.warning("incident check failed (%s)", type(e).__name__)
+        await _undo_incidents(session, redis)
+
+
+async def _undo_incidents(session: AsyncSession, redis: Redis) -> None:
+    """Roll back an incident attempt: drop its rows, its copied files and the once-per-60 s
+    keys it set, so the next completing event can still raise the incident."""
+    session.info.pop(FIRED, None)
+    store.forget_deferred_files(session)
+    try:
+        await session.rollback()
+    except Exception:  # noqa: BLE001
+        pass
+    for path in session.info.pop(NEW_FILES, []):
+        await store.remove_path(path)
+    keys = session.info.pop(NX_KEYS, [])
+    if keys:
         try:
-            await session.rollback()
+            await redis.delete(*keys)
         except Exception:  # noqa: BLE001
             pass
 

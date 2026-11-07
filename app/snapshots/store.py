@@ -131,6 +131,11 @@ async def save(
         return None
 
 
+async def remove_path(path: str) -> None:
+    """Remove one stored file by its relative path (a failure is logged by type, not raised)."""
+    await asyncio.to_thread(_remove_file, path)
+
+
 async def discard_file(snapshot: Snapshot) -> None:
     """For a caller whose commit failed after `save`: remove the now-unreferenced file."""
     await asyncio.to_thread(_remove_file, snapshot.path)
