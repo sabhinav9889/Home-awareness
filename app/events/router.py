@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import time
 from datetime import UTC, datetime
 from typing import Annotated
@@ -22,10 +24,12 @@ from app.metrics import ALERTS_CREATED, EVENTS_MERGED, EVENTS_RECEIVED
 from app.ratelimit import by_device_key, enforce, rate_limit
 from app.redis import get_redis
 from app.rules.engine import RuleOutcome, process_event
+from app.rules.incidents import FIRED, NEW_FILES, check_incidents
 from app.snapshots import store
 from app.tenancy import Tenant, get_tenant
 
 router = APIRouter(tags=["events"])
+log = logging.getLogger(__name__)
 
 HOUSEHOLD_EVENTS_PER_MINUTE = 300
 # Hard limit for a whole multipart request. Bigger is refused (413, or 411 with no
@@ -178,7 +182,38 @@ async def post_event(
             "has_snapshot": snapshot is not None,
         },
     )
+    await _raise_incidents(session, redis, jobs, event)
     return EventAccepted(event_id=event.id, merged=event.merged, alerts=len(outcome.alert_ids))
+
+
+async def _raise_incidents(
+    session: AsyncSession, redis: Redis, jobs: JobRunner, event: Event
+) -> None:
+    """Follow-up incidents, after the ingredient is committed and enqueued. Own commit, own
+    enqueue; any failure is logged by type only and never touches the ingredient's response."""
+    try:
+        session.info.pop(FIRED, None)
+        alert_ids = await check_incidents(session, redis, event, time.time())
+        if not session.info.pop(FIRED, False):
+            return  # nothing was raised: nothing to commit
+        try:
+            await session.commit()
+        except BaseException:
+            store.forget_deferred_files(session)
+            for path in session.info.pop(NEW_FILES, []):
+                await asyncio.to_thread(store._remove_file, path)
+            raise
+        session.info.pop(NEW_FILES, None)
+        await store.delete_deferred_files(session)
+        for alert_id in alert_ids:
+            ALERTS_CREATED.labels("incident").inc()
+            await enqueue_or_fallback(jobs, alert_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("incident check failed (%s)", type(e).__name__)
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 @router.get(
