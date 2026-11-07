@@ -326,6 +326,7 @@ h2 { font-size: 16px; }
   display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
   padding: 16px; border-radius: 12px; background: var(--teal-soft); color: var(--teal-deep);
 }
+.pair-result[hidden] { display: none; }
 .pair-result p { margin: 0; font-size: 14px; }
 .pair-code {
   font: 700 clamp(28px, 9vw, 40px) ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;

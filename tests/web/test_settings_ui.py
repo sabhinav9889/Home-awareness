@@ -52,6 +52,7 @@ def _no_overflow(page):
 def test_add_sensor_shows_an_8_char_code_and_a_live_countdown(page, live):
     m = _member(live)
     _open(page, m, "#/sensors")
+    expect(page.locator(".pair-result")).to_be_hidden()  # no empty box before a code exists
     page.get_by_label("Sensor name").fill("Kitchen")
     page.get_by_label("Kind").select_option("pi")
     with page.expect_response(re.compile(r"/devices/pairing-codes$")) as info:

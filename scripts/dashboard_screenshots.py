@@ -8,6 +8,7 @@ again at the end. Needs Postgres and Google Chrome:
     uv run python scripts/dashboard_screenshots.py
 """
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -29,6 +30,11 @@ from tests.web.test_overview import (  # noqa: E402
 OUT = ROOT / "docs" / "screenshots"
 SIZES = {"mobile": (390, 844), "desktop": (1280, 800)}
 PRIVATE = ["overview", "sounds", "sensors", "channels", "household"]
+HEADINGS = {
+    "overview": "Overview", "sounds": "Sounds & rules", "sensors": "Sensors",
+    "channels": "Alert channels", "household": "Household",
+    "login": None, "signup": None,
+}  # fmt: skip
 PUBLIC = ["login", "signup"]
 
 
@@ -81,11 +87,14 @@ def main():
                 for name in PUBLIC:
                     page.goto(f"/app/#/{name}")
                     expect(page.get_by_role("heading", level=1)).to_be_visible()
+                    page.wait_for_url(f"**/app/#/{name}")
                     page.screenshot(path=OUT / f"{name}-{size}.png")
                 page.evaluate("t => sessionStorage.setItem('ha.token', t)", owner.token)
                 for name in PRIVATE:
                     page.goto(f"/app/#/{name}")
-                    expect(page.get_by_role("heading", level=1)).to_be_visible()
+                    expect(
+                        page.get_by_role("heading", level=1, name=HEADINGS[name])
+                    ).to_be_visible()
                     page.wait_for_function("() => document.documentElement.dataset.live === 'live'")
                     if name == "overview":
                         expect(page.locator("section.events[aria-busy='false']")).to_have_count(1)
@@ -106,8 +115,12 @@ def main():
             browser.close()
         finally:
             _run(_truncate_all())
-    for f in sorted(OUT.glob("*.png")):
+    files = sorted(OUT.glob("*.png"))
+    for f in files:
         print(f"{f.relative_to(ROOT)}  {f.stat().st_size // 1024} KB")
+    digests = [hashlib.md5(f.read_bytes()).hexdigest() for f in files]  # noqa: S324
+    if len(files) != 16 or len(set(digests)) != len(digests):
+        raise SystemExit("screenshots are missing or identical: a view did not render")
 
 
 if __name__ == "__main__":
