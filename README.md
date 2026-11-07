@@ -72,6 +72,17 @@ The screenshots show a made-up demo household. Regenerate them with `uv run pyth
 
 The bot token and webhook secret are kept out of logs.
 
+## Camera snapshots (optional)
+
+A camera sensor may attach one JPEG (at most 300 KB, 640 px on the longest side) to an alerting event; no video ever reaches the server. The server keeps it encrypted (Fernet) on disk, shows it to household members, and uploads it to Telegram (`sendPhoto`) and ntfy (an attachment) with the alert; it never sends a link.
+
+1. Generate a key and put it in `.env` as `SNAPSHOT_KEY`:
+   `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+   Keep it safe: without it stored snapshots cannot be read. If `SNAPSHOT_KEY` is set but not a valid key, the server refuses to start; if it is unset, events are accepted and images are dropped (one warning in the log).
+2. Images live in the `snapshots` Docker volume (`/data/snapshots`, shared by `api` and `worker`; set `SNAPSHOT_DIR` to move it). Back it up with the database if you want to keep images.
+3. Each household chooses how long images are kept (1, 7 or 30 days, default 7) and is capped at 200 MB; the oldest images go first. The worker's 5-minute sweep applies both, and also removes files left behind by a deleted household or event after a day.
+4. Fetch an image with `GET /snapshots/{event_id}` and a member's Bearer token or an agent token (`Cache-Control: private, no-store`).
+
 ## Security
 
 - A password reset (`POST /auth/password-reset/confirm`) signs out every session: all login tokens stop working and all `ha-agent` tokens are revoked. Pending invites created by that member are deleted.

@@ -207,3 +207,18 @@ def frozen_ratelimit_clock(monkeypatch):
     """Pin the rate limiter to one window so limit tests never straddle a boundary."""
     monkeypatch.setattr("app.ratelimit.now", lambda: FROZEN_RATELIMIT_NOW)
     return FROZEN_RATELIMIT_NOW
+
+
+@pytest.fixture(autouse=True)
+def snapshot_env(monkeypatch, tmp_path):
+    """Every test gets its own snapshot directory and key: none may touch /data/snapshots."""
+    from cryptography.fernet import Fernet
+
+    import app.snapshots.store as store
+
+    env = types.SimpleNamespace(
+        snapshot_key=Fernet.generate_key().decode(), snapshot_dir=str(tmp_path / "snapshots")
+    )
+    monkeypatch.setattr(store, "get_settings", lambda: env)
+    monkeypatch.setattr(store, "_warned_no_key", False)
+    return env

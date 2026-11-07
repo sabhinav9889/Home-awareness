@@ -2,9 +2,12 @@ import time
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.datastructures import UploadFile
 
 from app.alerts.jobs import JobRunner, enqueue_or_fallback, get_job_runner
 from app.catalog import get_sound
@@ -19,11 +22,48 @@ from app.metrics import ALERTS_CREATED, EVENTS_MERGED, EVENTS_RECEIVED
 from app.ratelimit import by_device_key, enforce, rate_limit
 from app.redis import get_redis
 from app.rules.engine import RuleOutcome, process_event
+from app.snapshots import store
 from app.tenancy import Tenant, get_tenant
 
 router = APIRouter(tags=["events"])
 
 HOUSEHOLD_EVENTS_PER_MINUTE = 300
+# A multipart upload bigger than this is refused up front (the JPEG limit is 300 KB; the rest
+# is the small JSON part and framing). Over-size images below it are dropped, event kept.
+MAX_UPLOAD_BYTES = 1024 * 1024
+
+
+async def _read_event(request: Request) -> tuple[EventIn, bytes | None]:
+    """The event JSON, plus the optional snapshot bytes of a multipart upload. A plain JSON
+    body (current sensors) works exactly as before; multipart carries the same JSON in an
+    `event` part and the JPEG in a `snapshot` part."""
+    is_multipart = request.headers.get("content-type", "").startswith("multipart/form-data")
+    jpeg: bytes | None = None
+    try:
+        if is_multipart:
+            length = request.headers.get("content-length")
+            if length and length.isdigit() and int(length) > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="upload too large")
+            form = await request.form(max_part_size=MAX_UPLOAD_BYTES)
+            part = form.get("event")
+            if isinstance(part, UploadFile):
+                part = (await part.read(MAX_UPLOAD_BYTES)).decode("utf-8", "replace")
+            if not isinstance(part, str):
+                raise RequestValidationError(
+                    [{"type": "missing", "loc": ("body", "event"), "msg": "Field required"}]
+                )
+            image = form.get("snapshot")
+            if isinstance(image, UploadFile):
+                jpeg = await image.read(store.MAX_BYTES + 1)  # +1: detect "too big"
+            raw = part.encode()
+        else:
+            raw = await request.body()
+        return EventIn.model_validate_json(raw), jpeg
+    except ValidationError as e:
+        errors = e.errors(include_url=False, include_context=False, include_input=False)
+        raise RequestValidationError(
+            [{**err, "loc": ("body", *err["loc"])} for err in errors]
+        ) from None
 
 
 async def _household_event_limit(
@@ -45,16 +85,43 @@ async def _household_event_limit(
         Depends(rate_limit("events", 60, 60, by_device_key)),
         Depends(_household_event_limit),
     ],
-    description=f"Report a detected sound (type, confidence, time; never audio). {DISCLAIMER}",
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {"schema": EventIn.model_json_schema()},
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["event"],
+                        "properties": {
+                            "event": {"type": "string", "description": "The event JSON."},
+                            "snapshot": {
+                                "type": "string",
+                                "format": "binary",
+                                "description": "Optional JPEG, at most 300 KB.",
+                            },
+                        },
+                    }
+                },
+            },
+        }
+    },
+    description=(
+        "Report a detected sound (type, confidence, time; never audio). Send JSON, or "
+        "multipart with the same JSON in `event` and an optional `snapshot` JPEG (kept only "
+        f"from cameras that may send snapshots). {DISCLAIMER}"
+    ),
 )
 async def post_event(
-    body: EventIn,
+    request: Request,
     device: Annotated[Device, Depends(current_device)],
     tenant: Annotated[Tenant, Depends(get_device_tenant)],
     session: Annotated[AsyncSession, Depends(get_session)],
     redis: Annotated[Redis, Depends(get_redis)],
     jobs: Annotated[JobRunner, Depends(get_job_runner)],
 ) -> EventAccepted:
+    body, jpeg = await _read_event(request)
     now = datetime.now(UTC)
     event = tenant.add(
         Event(
@@ -66,9 +133,17 @@ async def post_event(
         )
     )
     await session.flush()
+    snapshot = None
+    if jpeg is not None and "video" in device.capabilities.split(",") and device.send_snapshots:
+        snapshot = await store.save(session, tenant.household_id, event.id, jpeg)
     outcome: RuleOutcome = await process_event(session, redis, event, time.time())
     event.merged = outcome.merged
-    await session.commit()
+    try:
+        await session.commit()
+    except BaseException:
+        if snapshot is not None:
+            await store.discard_file(snapshot)
+        raise
     EVENTS_RECEIVED.labels(event.sound_key).inc()
     if event.merged:
         EVENTS_MERGED.inc()
@@ -89,6 +164,7 @@ async def post_event(
             "confidence": event.confidence,
             "received_at": now.isoformat(),
             "merged": event.merged,
+            "has_snapshot": snapshot is not None,
         },
     )
     return EventAccepted(event_id=event.id, merged=event.merged, alerts=len(outcome.alert_ids))

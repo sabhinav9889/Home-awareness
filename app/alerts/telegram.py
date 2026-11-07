@@ -17,3 +17,32 @@ async def send_message(http: httpx.AsyncClient, token: str, chat_id: str, text: 
         data = {}
     if r.status_code != 200 or not data.get("ok"):
         raise DeliveryError(f"telegram {r.status_code}: {data.get('description', 'error')}")
+
+
+async def send_photo(
+    http: httpx.AsyncClient, token: str, chat_id: str, jpeg: bytes, caption: str
+) -> None:
+    try:
+        r = await http.post(
+            f"https://api.telegram.org/bot{token}/sendPhoto",
+            data={"chat_id": chat_id, "caption": caption},
+            files={"photo": ("snapshot.jpg", jpeg, "image/jpeg")},
+        )
+    except httpx.HTTPError as e:
+        raise DeliveryError(f"telegram request failed: {type(e).__name__}") from None
+    try:
+        data = r.json()
+    except ValueError:
+        data = {}
+    if r.status_code != 200 or not data.get("ok"):
+        raise DeliveryError(f"telegram {r.status_code}: {data.get('description', 'error')}")
+
+
+async def send_photo_or_message(
+    http: httpx.AsyncClient, token: str, chat_id: str, jpeg: bytes, text: str
+) -> None:
+    """The alert with its photo; if Telegram refuses the photo, the plain text goes instead."""
+    try:
+        await send_photo(http, token, chat_id, jpeg, text)
+    except DeliveryError:
+        await send_message(http, token, chat_id, text)

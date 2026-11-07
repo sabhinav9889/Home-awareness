@@ -10,6 +10,7 @@ x-app-env: &app-env
     TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
     TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+    SNAPSHOT_KEY: ${SNAPSHOT_KEY:-}
 
 x-app-deps: &app-deps
   migrate: {condition: service_completed_successfully}
@@ -56,6 +57,8 @@ services:
     ports:
       - "${API_BIND_HOST:-127.0.0.1}:${API_HOST_PORT:-8000}:8000"
     depends_on: *app-deps
+    volumes:
+      - snapshots:/data/snapshots
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -68,6 +71,8 @@ services:
     <<: *app-env
     command: ["celery", "-A", "app.alerts.celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
     depends_on: *app-deps
+    volumes:
+      - snapshots:/data/snapshots  # reads images to attach to alerts; runs the retention sweep
     healthcheck:
       # $$ escapes Compose interpolation: $HOSTNAME is expanded by the container's shell.
       test: ["CMD-SHELL", "celery -A app.alerts.celery_app inspect ping -d celery@$$HOSTNAME --timeout 5"]
@@ -84,3 +89,4 @@ services:
 
 volumes:
   pgdata:
+  snapshots:

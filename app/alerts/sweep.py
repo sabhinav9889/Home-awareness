@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.alerts.models import Alert, Delivery
 from app.metrics import ALERTS_STALE
+from app.snapshots import store
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +53,17 @@ async def sweep_stale_alerts(session: AsyncSession, now: datetime) -> int:
     return len(ids)
 
 
+async def sweep_snapshots(session: AsyncSession, now: datetime) -> int:
+    """Delete snapshots past their household's retention, then files nothing refers to.
+    Cross-household sweep (sanctioned Tenant bypass; it only deletes by age). One commit."""
+    expired = await store.purge_expired(session, now)
+    await session.commit()
+    orphans = await store.purge_orphans(session, now)
+    if expired or orphans:
+        log.info("snapshot sweep: %d expired, %d orphan file(s) removed", expired, orphans)
+    return expired
+
+
 async def sweep_loop(
     session_factory: Callable[[], Any],
     *,
@@ -66,4 +78,9 @@ async def sweep_loop(
                 await sweep_stale_alerts(session, clock())
         except Exception:  # noqa: BLE001
             log.exception("stale alert sweep failed; will retry")
+        try:
+            async with session_factory() as session:
+                await sweep_snapshots(session, clock())
+        except Exception:  # noqa: BLE001
+            log.exception("snapshot sweep failed; will retry")
         await asyncio.sleep(interval_s)

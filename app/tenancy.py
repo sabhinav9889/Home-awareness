@@ -102,5 +102,6 @@ async def get_agent_tenant(
     member: Annotated[Member, Depends(current_member_or_agent)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> Tenant:
-    """Like get_tenant, but an `ha-agent` token is accepted too. Only for POST /alerts/{id}/ack."""
+    """Like get_tenant, but an `ha-agent` token is accepted too. Only for POST /alerts/{id}/ack
+    and GET /snapshots/{event_id}."""
     return Tenant(member, session)
