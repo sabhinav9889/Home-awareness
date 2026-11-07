@@ -163,6 +163,26 @@ async def signed_up(client, session, outbox):
 
 
 @pytest.fixture
+async def member_headers(client, outbox):
+    """Factory: invite a non-owner member into the household owning `owner_headers`."""
+
+    async def _make(owner_headers, email="member@example.com", password="correct-horse-1"):
+        r = await client.post("/households/me/invites", headers=owner_headers)
+        token = r.json()["invite_url"].split("invite=")[1]
+        r = await client.post(
+            "/auth/signup", json={"email": email, "password": password, "invite_token": token}
+        )
+        assert r.status_code == 201, r.text
+        token = outbox[-1].body.split("token=")[1].split()[0]
+        assert (await client.post("/auth/confirm", json={"token": token})).status_code == 204
+        r = await client.post("/auth/login", json={"email": email, "password": password})
+        assert r.status_code == 200, r.text
+        return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    return _make
+
+
+@pytest.fixture
 async def two_households(signed_up):
     """Two independent households -> (headers_a, headers_b)."""
     _, headers_a = await signed_up(email="a@example.com", household_name="A")
