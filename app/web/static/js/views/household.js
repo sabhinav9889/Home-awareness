@@ -44,6 +44,8 @@ export async function householdView() {
       try {
         household = await request("PATCH", "/households/me", { timezone: value });
         tzMsg.textContent = "Timezone saved.";
+        // The alert screen (and anything else showing times) follows at once.
+        window.dispatchEvent(new CustomEvent("household-updated", { detail: household }));
       } catch (err) {
         select.value = household.timezone;
         tzMsg.classList.add("is-error");

@@ -415,3 +415,20 @@ def test_phone_width_has_no_horizontal_overflow(new_page, live, hash_):
         page.get_by_role("button", name="Create invite link").click()
         expect(page.get_by_label("Invite link")).to_be_visible()
     assert _no_overflow(page)
+
+
+def test_alert_screen_follows_a_timezone_change_at_once(new_page, live):
+    from tests.web.test_alert_ui import _test_alert
+
+    page = _page(new_page, timezone_id="America/New_York")
+    m = _member(live, timezone="UTC")
+    _open(page, m, "#/household")
+    _wait_live(page)
+    with page.expect_response(lambda r: r.request.method == "PATCH"):
+        page.get_by_label("Timezone").select_option("Asia/Tokyo")
+    expect(page.locator(".tz-msg")).to_have_text("Timezone saved.")
+    alert_id = _test_alert(live, m)  # no route change in between
+    rows = _get(live, m, "/alerts")
+    created = next(a for a in rows if a["id"] == alert_id)["created_at"]
+    tokyo = datetime.fromisoformat(created).astimezone(ZoneInfo("Asia/Tokyo"))
+    expect(page.get_by_role("alertdialog")).to_contain_text(tokyo.strftime("%H:%M:%S"))

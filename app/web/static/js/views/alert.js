@@ -62,6 +62,13 @@ export function start({ timezone } = {}) {
   }
   if (!subscribed) {
     subscribed = true;
+    // household.js fires this after a PATCH: use a new timezone at once, even on screen.
+    window.addEventListener("household-updated", (ev) => {
+      const tz = ev.detail && ev.detail.timezone;
+      if (!tz || !me) return; // logged out meanwhile
+      timeZone = validTimeZone(tz);
+      render();
+    });
     subscribe({ onMessage, onStatus: (status) => { if (status === "live") catchUp(); } });
   }
 }
