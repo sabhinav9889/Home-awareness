@@ -23,8 +23,10 @@ export function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+export const CAMERA_NOTE = "Cameras send a single snapshot only when they raise an alert.";
+
 export function footer() {
-  return el("p", { class: "disclaimer" }, DISCLAIMER);
+  return el("div", { class: "disclaimer" }, el("p", {}, DISCLAIMER), el("p", {}, CAMERA_NOTE));
 }
 
 // A labelled input; the id ties <label for> to the control.

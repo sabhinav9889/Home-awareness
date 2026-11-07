@@ -9,6 +9,7 @@ import * as alertScreen from "./views/alert.js";
 import { channelsView } from "./views/channels.js";
 import { householdView } from "./views/household.js";
 import { overviewView } from "./views/overview.js";
+import { roomsView } from "./views/rooms.js";
 import { sensorsView } from "./views/sensors.js";
 import { soundsView } from "./views/sounds.js";
 
@@ -16,6 +17,7 @@ import { soundsView } from "./views/sounds.js";
 const NAV = [
   { hash: "#/overview", label: "Overview" },
   { hash: "#/sounds", label: "Sounds & rules" },
+  { hash: "#/rooms", label: "Rooms" },
   { hash: "#/sensors", label: "Sensors" },
   { hash: "#/channels", label: "Alert channels" },
   { hash: "#/household", label: "Household" },
@@ -29,6 +31,7 @@ route("#/reset", resetView, { public: true });
 route("#/join", joinView, { public: true });
 route("#/overview", overviewView);
 route("#/sounds", soundsView);
+route("#/rooms", roomsView);
 route("#/sensors", sensorsView);
 route("#/channels", channelsView);
 route("#/household", householdView);
