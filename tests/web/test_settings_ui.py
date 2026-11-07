@@ -160,10 +160,9 @@ def test_each_route_focuses_its_heading(page, live):
     m = _member(live)
     _open(page, m, "#/sensors")
     expect(page.get_by_role("heading", level=1, name="Sensors")).to_be_focused()
-    for link, heading in (("Overview", "Overview"), ("Alert channels", "Alert channels"),
-                          ("Household", "Household"), ("Sounds & rules", "Sounds & rules")):
-        page.get_by_role("link", name=link).click()
-        expect(page.get_by_role("heading", level=1, name=heading)).to_be_focused()
+    for name in ("Overview", "Alert channels", "Household", "Sounds & rules"):
+        page.get_by_role("link", name=name).click()  # each link's view has the same h1
+        expect(page.get_by_role("heading", level=1, name=name)).to_be_focused()
     page.get_by_role("button", name="Log out").click()
     expect(page.get_by_role("heading", level=1, name="Log in")).to_be_focused()
 
@@ -236,11 +235,23 @@ def test_telegram_link_opens_a_validated_deep_link(page, live, monkeypatch):
 
 def test_enable_browser_notifications_shows_the_result(new_page, live):
     page = _page(new_page)  # stubbed Notification: requestPermission -> "granted"
+    page.add_init_script("Notification.permission = 'default'")
     m = _member(live)
     _open(page, m, "#/channels")
     page.get_by_role("button", name="Enable browser notifications").click()
     expect(page.locator(".notify-msg")).to_contain_text("allowed")
     assert page.evaluate("window.__permissionAsked") == 1
+    on = page.get_by_role("button", name="Notifications are on")
+    expect(on).to_be_disabled()
+    expect(page.get_by_role("button", name="Enable browser notifications")).to_have_count(0)
+
+
+def test_notifications_already_granted_shows_them_on(new_page, live):
+    page = _page(new_page)  # stubbed Notification.permission = "granted"
+    m = _member(live)
+    _open(page, m, "#/channels")
+    expect(page.get_by_role("button", name="Notifications are on")).to_be_disabled()
+    expect(page.locator(".notify-msg")).to_contain_text("allowed")
 
 
 def test_notifications_not_enabled_copy_is_accurate(new_page, live):

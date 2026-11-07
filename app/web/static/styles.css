@@ -219,6 +219,12 @@ h2 { font-size: 16px; }
 .ch-on { color: var(--ok-ink); font-weight: 600; }
 .ch-off { color: var(--muted); }
 
+/* Phones: drop Confidence so the Result chip fits without sideways scrolling. */
+@media (max-width: 479.98px) {
+  .events-table { min-width: 0; }
+  .events-table .col-conf { display: none; }
+}
+
 @media (max-width: 640px) {
   .status-card { padding: 20px; }
   .status-counts { gap: 20px; }

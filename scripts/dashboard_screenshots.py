@@ -38,6 +38,15 @@ HEADINGS = {
 PUBLIC = ["login", "signup"]
 
 
+def _ack(live, member, alert_ids):
+    import httpx
+
+    for alert_id in alert_ids:
+        httpx.post(
+            f"{live.base_url}/alerts/{alert_id}/ack", headers=member.headers
+        ).raise_for_status()
+
+
 def seed(live):
     """A household with three online sensors, one offline, one waiting to pair, some history."""
     import httpx
@@ -57,6 +66,7 @@ def seed(live):
         event_id, alert_ids = _alerting_event(live, d, kind)
         ids += alert_ids
     _deliver(live, *ids)
+    _ack(live, owner, ids)  # handled history: the alert screen's catch-up leaves it alone
     _go_offline(live, attic.id)
     httpx.post(  # a sensor still waiting to be paired
         f"{live.base_url}/devices/pairing-codes",
@@ -109,8 +119,12 @@ def main():
                 live.redis.flushall()  # forget the cooldown from the previous pass
                 _, alert_ids = _alerting_event(live, living, "scream")
                 _deliver(live, *alert_ids)
-                expect(page.get_by_role("alertdialog")).to_be_visible()
+                screen = page.get_by_role("alertdialog")
+                expect(screen).to_be_visible()
+                # past the 600 ms stray-key guard, so the buttons show as they will be used
+                expect(screen.get_by_role("button", name="I'm on it")).to_be_enabled()
                 page.screenshot(path=OUT / f"alert-{size}.png")
+                _ack(live, owner, alert_ids)  # so the next size's fresh session starts clear
                 ctx.close()
             browser.close()
         finally:

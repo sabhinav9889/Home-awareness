@@ -162,7 +162,7 @@ export async function overviewView(_params, { household }) {
     el("table", { class: "events-table", "aria-labelledby": "feed-h" },
       el("thead", {}, el("tr", {},
         ["Time", "Sound", "Sensor", "Confidence", "Result"].map((h) =>
-          el("th", { scope: "col" }, h)))),
+          el("th", { scope: "col", class: h === "Confidence" ? "col-conf" : null }, h)))),
       tbody)),
   emptyNote);
 
@@ -247,7 +247,7 @@ export async function overviewView(_params, { household }) {
         el("td", { class: "cell-time" }, fmt.time(new Date(e.received_at))),
         el("td", { class: "cell-sound" }, e.label),
         el("td", {}, e.device_name || "Removed sensor"),
-        el("td", {}, Number(e.confidence).toFixed(2)),
+        el("td", { class: "col-conf" }, Number(e.confidence).toFixed(2)),
         el("td", {}, el("span", { class: `chip ${cls}` }, text)));
     }));
     emptyNote.hidden = rows.length > 0;

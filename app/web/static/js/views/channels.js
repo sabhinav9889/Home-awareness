@@ -262,10 +262,17 @@ export async function channelsView() {
       : "This browser doesn't support notifications.");
   const notifyBtn = el("button", { type: "button", class: "btn btn-quiet",
     disabled: !supported }, "Enable browser notifications");
+  function notifyButtonFor(permission) {
+    if (permission !== "granted") return;
+    notifyBtn.disabled = true;
+    notifyBtn.textContent = "Notifications are on";
+  }
+  if (supported) notifyButtonFor(Notification.permission);
   notifyBtn.addEventListener("click", async () => {
     try {
       const result = await Notification.requestPermission();
       notifyMsg.textContent = permissionText(result);
+      notifyButtonFor(result);
     } catch {
       notifyMsg.textContent = "This browser didn't let the page ask.";
     }

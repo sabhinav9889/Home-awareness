@@ -276,7 +276,7 @@ def test_device_name_is_text_not_html(page, live):
     assert dialogs == []
 
 
-def test_events_table_scrolls_inside_its_box_at_phone_width(new_page, live):
+def test_phone_width_shows_the_result_chip_without_scrolling(new_page, live):
     page = new_page(viewport={"width": 360, "height": 740})
     m = _member(live)
     hall = _device(live, m, "A sensor with a fairly long name")
@@ -285,9 +285,28 @@ def test_events_table_scrolls_inside_its_box_at_phone_width(new_page, live):
     _open(page, m)
     expect(_rows(page)).to_have_count(1)
     box = page.locator(".table-scroll")
-    assert box.evaluate("e => getComputedStyle(e).overflowX") == "auto"
-    assert box.evaluate("e => e.scrollWidth > e.clientWidth")  # the table scrolls in its box
+    assert box.evaluate("e => getComputedStyle(e).overflowX") == "auto"  # still a safety net
+    expect(page.get_by_role("columnheader", name="Confidence")).to_be_hidden()
+    expect(page.get_by_role("columnheader", name="Result")).to_be_visible()
+    chip = _rows(page).first.locator(".chip")
+    expect(chip).to_be_visible()
+    inside = box.evaluate(
+        "(b, c) => c.getBoundingClientRect().right <= b.getBoundingClientRect().right + 0.5",
+        chip.element_handle(),
+    )
+    assert inside  # no sideways scroll needed to read the result
+    assert box.evaluate("e => e.scrollLeft") == 0
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+def test_laptop_width_shows_the_confidence_column(new_page, live):
+    page = new_page(viewport={"width": 1280, "height": 800})
+    m = _member(live)
+    _event(live, _device(live, m))
+    _open(page, m)
+    expect(_rows(page)).to_have_count(1)
+    expect(page.get_by_role("columnheader", name="Confidence")).to_be_visible()
+    expect(_rows(page).first.locator("td").nth(3)).to_have_text(re.compile(r"^\d\.\d\d$"))
 
 
 def test_backoff_grows_when_the_server_drops_every_socket_at_once(page, live):
