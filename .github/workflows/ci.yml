@@ -32,6 +32,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv python install 3.12
       - run: uv sync --frozen
+      - uses: browser-actions/setup-chrome@v1  # dashboard tests drive Chrome (they skip without it)
       - name: Migrations apply to a fresh database and match the models
         run: uv run alembic upgrade head && uv run alembic check
       - run: uv run ruff check . && uv run pytest -q

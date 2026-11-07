@@ -7,6 +7,7 @@ API tests, the server commits for real, so every web test truncates the tables a
 """
 
 import asyncio
+import contextlib
 import shutil
 import socket
 import threading
@@ -68,8 +69,9 @@ async def _truncate_all() -> None:
     await engine.dispose()
 
 
-@pytest.fixture(scope="session")
-def live_server():
+@contextlib.contextmanager
+def run_live_server():
+    """The real app on a free port (also used by scripts/dashboard_screenshots.py)."""
     _run(_ensure_tables())
     app = create_app()
     factory = async_sessionmaker(
@@ -111,6 +113,12 @@ def live_server():
     )
     server.should_exit = True
     thread.join(timeout=10)
+
+
+@pytest.fixture(scope="session")
+def live_server():
+    with run_live_server() as server:
+        yield server
 
 
 @pytest.fixture
