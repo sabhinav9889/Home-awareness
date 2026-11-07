@@ -8,11 +8,13 @@ import numpy as np
 import pytest
 
 from ha_edge.audio import (
+    ClipMonitor,
     InputDevice,
     MicLost,
     MicNotFound,
     MicStream,
     Windower,
+    clip_ratio,
     list_inputs,
     resample_linear,
     resolve_device,
@@ -357,3 +359,61 @@ def test_cli_devices_reports_bad_pw_dump_output(monkeypatch, capsys):
     monkeypatch.setattr(audio, "list_inputs", lambda: real(run=run))
     assert cli.sensor_main(["devices"]) == 1
     assert "Cannot list microphones" in capsys.readouterr().err
+
+
+def _window(clipped_fraction: float) -> np.ndarray:
+    w = np.full(15600, 0.1, dtype=np.float32)
+    n = round(clipped_fraction * len(w))
+    w[:n] = 1.0
+    w[n : 2 * n] = -1.2  # negative overload counts too
+    return w
+
+
+def test_clip_ratio_counts_samples_at_full_scale():
+    assert clip_ratio(np.zeros(100, dtype=np.float32)) == 0.0
+    w = np.array([0.98, 0.99, -0.99, 1.2, 0.0], dtype=np.float32)
+    assert clip_ratio(w) == pytest.approx(3 / 5)
+    assert clip_ratio(np.zeros(0, dtype=np.float32)) == 0.0
+
+
+def test_clip_monitor_needs_3_of_last_10_windows_over_1_percent():
+    m = ClipMonitor()
+    loud, quiet = _window(0.006), _window(0.0)  # 0.6 % each sign = 1.2 % clipped
+    assert clip_ratio(loud) >= 0.01
+    assert clip_ratio(_window(0.004)) < 0.01
+    assert m.observe(loud, 0.0) is False
+    assert m.observe(quiet, 0.5) is False
+    assert m.observe(loud, 1.0) is False
+    assert not m.overloading
+    assert m.observe(_window(0.004), 1.5) is False  # 0.8 %: below 1 %
+    assert m.observe(loud, 2.0) is True  # third clipped window -> warn now
+    assert m.overloading
+    for i in range(5):  # windows 6-10: the last 10 still hold all three loud ones
+        m.observe(quiet, 2.5 + i * 0.5)
+    assert m.overloading
+    m.observe(quiet, 5.0)  # window 11: the first loud window slides out
+    assert not m.overloading
+
+
+def test_clip_monitor_warns_at_most_every_5_minutes():
+    m = ClipMonitor()
+    loud = _window(0.05)
+    warnings = [t for t in range(700) if m.observe(loud, float(t))]
+    assert warnings == [2, 302, 602]
+
+
+def test_clip_monitor_reports_clipping_over_the_last_minute():
+    m = ClipMonitor()
+    loud, quiet = _window(0.05), _window(0.0)
+    assert m.clipping() is False
+    for t in (0.0, 0.5, 1.0):
+        m.observe(loud, t)
+    assert m.clipping() is True
+    for i in range(10):  # still overloading up to the window at 4.5 s
+        m.observe(quiet, 1.5 + i * 0.5)
+    assert not m.overloading
+    assert m.clipping() is True
+    m.observe(quiet, 64.5)
+    assert m.clipping() is True  # last overloaded window 60 s ago
+    m.observe(quiet, 64.6)
+    assert m.clipping() is False

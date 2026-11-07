@@ -106,6 +106,61 @@ def resolve_device(name: str | None, devices: list[InputDevice]) -> InputDevice:
     raise MicNotFound(name, available)
 
 
+CLIP_LEVEL = 0.99  # |sample| at or above this is treated as clipped
+
+
+def clip_ratio(window: np.ndarray) -> float:
+    """Fraction of samples at full scale."""
+    return float(np.mean(np.abs(window) >= CLIP_LEVEL)) if len(window) else 0.0
+
+
+class ClipMonitor:
+    """Notices a microphone input level set so high that loud sounds clip.
+
+    "Overloading" means at least ``min_ratio`` clipped samples in ``needed`` of the last
+    ``recent`` windows. Clipped audio distorts sounds (a shouted scream was heard as
+    snoring and coughing in live testing), so the user should lower the input level.
+    """
+
+    def __init__(
+        self,
+        min_ratio: float = 0.01,
+        needed: int = 3,
+        recent: int = 10,
+        warn_every_s: float = 300.0,
+        report_s: float = 60.0,
+    ) -> None:
+        self._min_ratio = min_ratio
+        self._needed = needed
+        self._recent: collections.deque[bool] = collections.deque(maxlen=recent)
+        self._warn_every_s = warn_every_s
+        self._report_s = report_s
+        self._last_warned: float | None = None
+        self._last_overloaded: float | None = None
+        self._last_seen: float | None = None
+
+    @property
+    def overloading(self) -> bool:
+        return sum(self._recent) >= self._needed
+
+    def observe(self, window: np.ndarray, at: float) -> bool:
+        """Record one window; True when the caller should warn now (rate-limited)."""
+        self._recent.append(clip_ratio(window) >= self._min_ratio)
+        self._last_seen = at
+        if not self.overloading:
+            return False
+        self._last_overloaded = at
+        if self._last_warned is not None and at - self._last_warned < self._warn_every_s:
+            return False
+        self._last_warned = at
+        return True
+
+    def clipping(self) -> bool:
+        """Whether the mic was overloading within ``report_s`` seconds of the latest window."""
+        last, seen = self._last_overloaded, self._last_seen
+        return last is not None and seen is not None and seen - last <= self._report_s
+
+
 class Windower:
     def __init__(self, window: int = 15600, hop: int = 7800):
         self.window = window

@@ -20,6 +20,7 @@ from app.devices.offline import household_recipients, notify_back_online
 from app.devices.schemas import (
     DeviceConfigOut,
     DeviceOut,
+    HeartbeatIn,
     PairIn,
     PairingCodeIn,
     PairingCodeOut,
@@ -155,10 +156,12 @@ async def heartbeat(
     session: Annotated[AsyncSession, Depends(get_session)],
     redis: Annotated[Redis, Depends(get_redis)],
     background: BackgroundTasks,
+    body: HeartbeatIn | None = None,
 ) -> DeviceConfigOut:
     was_offline = device.status == "offline"
     device.last_seen_at = datetime.now(UTC)
     device.status = "online"
+    device.mic_clipping = body.mic_clipping if body is not None else False
     config = await _config(session, device)
     recipients = await household_recipients(session, device.household_id) if was_offline else []
     await session.commit()

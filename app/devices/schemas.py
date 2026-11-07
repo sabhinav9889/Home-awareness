@@ -31,6 +31,14 @@ class DeviceOut(BaseModel):
     kind: str
     status: str
     last_seen_at: datetime | None
+    mic_clipping: bool
+
+
+class HeartbeatIn(BaseModel):
+    # Unknown fields are ignored (not forbidden) so a newer sensor keeps working against
+    # this server; the body itself is optional for sensors that predate it.
+    model_config = ConfigDict(extra="ignore")
+    mic_clipping: bool = False
 
 
 class WhoamiOut(BaseModel):

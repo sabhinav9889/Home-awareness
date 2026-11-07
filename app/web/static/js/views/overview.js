@@ -18,6 +18,9 @@ const FIRST_CONNECT_WAIT_MS = 3000; // load the data once the socket listens (or
 const ALERTS_REFRESH_MS = 800; // after a live event: did it alert me?
 const EARLY_MAX = 500; // messages held while loading; past this, catch up instead
 
+// Shown when the sensor's heartbeat says its microphone input level is clipping.
+export const MIC_CLIPPING_NOTE = "Microphone is overloading — lower its input level";
+
 export const KINDS = { laptop: "Laptop", phone: "Phone", pi: "Raspberry Pi", other: "Sensor" };
 
 function validTimeZone(tz) {
@@ -220,7 +223,8 @@ export async function overviewView(_params, { household }) {
       el("div", { class: "sensor-state" }, el("span", { class: "dot", "aria-hidden": "true" }),
         el("span", {}, state)),
       el("div", { class: "sensor-name" }, d.name),
-      el("div", { class: "sensor-sub" }, sub));
+      el("div", { class: "sensor-sub" }, sub),
+      d.mic_clipping ? el("div", { class: "sensor-note" }, MIC_CLIPPING_NOTE) : null);
   }
 
   function renderSensors() {

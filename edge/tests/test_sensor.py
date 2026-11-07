@@ -22,8 +22,9 @@ CHUNK = np.zeros(15600, dtype=np.float32)
 class FakeMic:
     """Yields `chunks` chunks, then either blocks forever or raises `then`."""
 
-    def __init__(self, chunks=1000, then=None, gap=0.0):
+    def __init__(self, chunks=1000, then=None, gap=0.0, chunk=CHUNK):
         self.chunks = chunks
+        self.chunk = chunk
         self.then = then
         self.gap = gap
         self.entered = False
@@ -42,7 +43,7 @@ class FakeMic:
     async def _gen(self):
         for _ in range(self.chunks):
             await asyncio.sleep(self.gap)
-            yield CHUNK
+            yield self.chunk
         if self.then is not None:
             raise self.then
         await asyncio.Event().wait()
@@ -75,10 +76,12 @@ class FakeClient:
         self.configs = list(configs or [DeviceConfig(frozenset({"doorbell"}), 60)])
         self.send_errors = list(send_errors or [])
         self.heartbeats = 0
+        self.mic_clipping: list[bool] = []
         self.sent = []
 
-    async def heartbeat(self):
+    async def heartbeat(self, mic_clipping=False):
         self.heartbeats += 1
+        self.mic_clipping.append(mic_clipping)
         item = self.configs.pop(0) if len(self.configs) > 1 else self.configs[0]
         if isinstance(item, BaseException):
             raise item
@@ -141,9 +144,9 @@ async def test_nothing_sent_before_first_heartbeat():
     gate = asyncio.Event()
 
     class SlowClient(FakeClient):
-        async def heartbeat(self):
+        async def heartbeat(self, mic_clipping=False):
             await gate.wait()
-            return await super().heartbeat()
+            return await super().heartbeat(mic_clipping)
 
     client = SlowClient()
     clf = FakeClassifier()
@@ -322,11 +325,11 @@ async def test_queued_event_for_sound_disabled_by_heartbeat_is_never_sent():
             self.second_done = False
             self.failed_sends = 0
 
-        async def heartbeat(self):
+        async def heartbeat(self, mic_clipping=False):
             if self.heartbeats >= 1:
                 while self.failed_sends < 3:  # let siren events pile up in the queue
                     await asyncio.sleep(0.001)
-            cfg = await super().heartbeat()
+            cfg = await super().heartbeat(mic_clipping)
             if self.heartbeats >= 2:
                 self.second_done = True
             return cfg
@@ -457,3 +460,31 @@ async def test_held_candidate_sent_on_stop():
     assert client.sent == []  # still held: no second window yet
     assert await finish(task, stop) == EXIT_OK
     assert [s for s, _, _ in client.sent] == ["doorbell"]
+
+
+async def test_clipping_mic_warns_once_and_reports_in_heartbeat(caplog):
+    caplog.set_level(logging.WARNING)
+    loud = np.full(15600, 0.1, dtype=np.float32)
+    loud[:1000] = 1.0  # 6 % of samples at full scale
+    client = FakeClient([DeviceConfig(frozenset({"doorbell"}), 1)])
+    task, stop = start(client, mic=FakeMic(chunks=30, gap=0.002, chunk=loud))
+    await until(lambda: True in client.mic_clipping)
+    assert await finish(task, stop) == EXIT_OK
+    warnings = [r.getMessage() for r in caplog.records if "overloading" in r.getMessage()]
+    assert warnings == [
+        (
+            "Microphone is overloading — lower its input level "
+            "(e.g. wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 0.3)"
+        )
+    ]
+    assert client.mic_clipping[0] is False  # before any audio
+
+
+async def test_quiet_mic_never_reports_clipping(caplog):
+    caplog.set_level(logging.WARNING)
+    client = FakeClient([DeviceConfig(frozenset({"doorbell"}), 1)])
+    task, stop = start(client, mic=FakeMic(chunks=30, gap=0.002))
+    await until(lambda: client.heartbeats >= 3)
+    await finish(task, stop)
+    assert set(client.mic_clipping) == {False}
+    assert "overloading" not in caplog.text

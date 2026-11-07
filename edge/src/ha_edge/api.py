@@ -164,8 +164,8 @@ class ServerClient:
         except (ValueError, KeyError, TypeError, AttributeError):
             raise ServerUnavailable("malformed pair response") from None
 
-    async def heartbeat(self) -> DeviceConfig:
-        resp = await self._post("/device/heartbeat")
+    async def heartbeat(self, mic_clipping: bool = False) -> DeviceConfig:
+        resp = await self._post("/device/heartbeat", {"mic_clipping": mic_clipping})
         if resp.status_code != 200:
             raise _rejected(resp)
         try:

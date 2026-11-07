@@ -188,6 +188,10 @@ h2 { font-size: 16px; }
 .sensor-offline .sensor-state { color: var(--amber-ink); }
 .sensor-offline .dot { border: 2px solid var(--amber); }
 .sensor-offline .sensor-sub { color: var(--amber-deep); }
+.sensor-note {
+  margin-top: 6px; padding: 4px 8px; border-radius: 6px; font-size: 13px;
+  background: var(--amber-bg); color: var(--amber-ink); border: 1px solid var(--amber);
+}
 .sensor-name { font-weight: 600; font-size: 16px; }
 .sensor-sub { font-size: 13px; color: var(--muted); }
 .empty-note { margin: 0; font-size: 14px; color: var(--muted); }
@@ -356,6 +360,7 @@ main h1[tabindex="-1"]:focus { outline: none; } /* focused on each route, not a 
 .device-row.sensor-online .device-state { color: var(--ok-ink); font-weight: 600; }
 .device-main { flex: 1 1 auto; min-width: 0; }
 .device-note { margin-top: 4px; font-size: 13px; color: var(--amber-deep); }
+.device-note.is-mic-clipping { color: var(--amber-ink); font-weight: 600; }
 .member-email { font-weight: 600; }
 .chip-role-owner { background: var(--teal-soft); color: var(--teal-ink); }
 .chip-role-member { background: var(--c-slate-bg); color: var(--c-slate-ink); }

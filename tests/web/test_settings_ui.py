@@ -113,6 +113,27 @@ def test_sensor_list_refreshes_on_device_online(page, live):
     expect(row).to_contain_text("Listening")
 
 
+CLIPPING_NOTE = "Microphone is overloading — lower its input level"
+
+
+def test_sensor_list_shows_mic_overloading_note(page, live):
+    m = _member(live)
+    hall, attic = _device(live, m, name="Hall"), _device(live, m, name="Attic")
+    r = httpx.post(
+        f"{live.base_url}/device/heartbeat", headers=hall.key, json={"mic_clipping": True}
+    )
+    assert r.status_code == 200, r.text
+    from tests.web.test_overview import _heartbeat
+
+    _heartbeat(live, attic)
+    _open(page, m, "#/sensors")
+    hall_row = page.locator(".device-row").filter(has_text="Hall")
+    expect(hall_row.locator(".device-note.is-mic-clipping")).to_have_text(CLIPPING_NOTE)
+    attic_row = page.locator(".device-row").filter(has_text="Attic")
+    expect(attic_row).to_contain_text("Listening")
+    expect(attic_row.locator(".is-mic-clipping")).to_have_count(0)
+
+
 # --- alert channels ---
 
 

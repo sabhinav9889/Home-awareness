@@ -55,6 +55,16 @@ async def test_heartbeat_parses_config(client):
     cfg = await client.heartbeat()
     assert cfg == DeviceConfig(frozenset({"doorbell", "smoke_alarm"}), 60)
     assert route.calls[0].request.headers["X-Device-Key"] == "secret-key-123"
+    assert json.loads(route.calls[0].request.content) == {"mic_clipping": False}
+
+
+@respx.mock
+async def test_heartbeat_reports_mic_clipping(client):
+    route = respx.post(f"{BASE}/device/heartbeat").respond(
+        200, json={"enabled_sounds": [], "heartbeat_interval_s": 60}
+    )
+    await client.heartbeat(mic_clipping=True)
+    assert json.loads(route.calls[0].request.content) == {"mic_clipping": True}
 
 
 @respx.mock

@@ -4,7 +4,7 @@
 import { request } from "../api.js";
 import { subscribe } from "../live.js";
 import { confirmDialog, el, field, show } from "../ui.js";
-import { ago, KINDS } from "./overview.js";
+import { ago, KINDS, MIC_CLIPPING_NOTE } from "./overview.js";
 
 const CODE_TTL_MS = 10 * 60_000;
 const TICK_MS = 1000;
@@ -94,7 +94,9 @@ export async function sensorsView() {
           [kind, el("span", { class: "device-state" }, state), when].filter(Boolean)
             .flatMap((x, i) => (i ? [" · ", x] : [x]))),
         d.status === "offline" ? el("div", { class: "device-note" },
-          "Alerts from this sensor have stopped. Check it is powered and on Wi-Fi.") : null),
+          "Alerts from this sensor have stopped. Check it is powered and on Wi-Fi.") : null,
+        d.mic_clipping ? el("div", { class: "device-note is-mic-clipping" }, MIC_CLIPPING_NOTE)
+          : null),
       remove);
   }
 

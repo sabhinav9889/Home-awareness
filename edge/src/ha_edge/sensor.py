@@ -21,7 +21,7 @@ from ha_edge.api import (
     Rejected,
     ServerUnavailable,
 )
-from ha_edge.audio import MicLost, Windower
+from ha_edge.audio import ClipMonitor, MicLost, Windower
 from ha_edge.config import SensorConfig
 from ha_edge.detector import Detector
 from ha_edge.labels import build_index
@@ -36,6 +36,10 @@ FIRST_HEARTBEAT_RETRY_S = 5.0
 DRAIN_INTERVAL_S = 1.0
 MAX_BACKOFF_S = 30.0
 FINAL_DRAIN_S = 3.0  # on exit, how long to try sending a last held detection
+CLIPPING_MESSAGE = (
+    "Microphone is overloading — lower its input level "
+    "(e.g. wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 0.3)"
+)
 REVOKED_MESSAGE = "This sensor was removed. Pair it again with `ha-sensor pair`."
 
 
@@ -66,6 +70,7 @@ async def run_sensor(
     names = list(classifier.class_names)
     detector = Detector(build_index(names), num_classes=len(names))
     queue = EventQueue(clock=monotonic)
+    clip = ClipMonitor()
     enabled: frozenset[str] = frozenset()  # empty until the first successful heartbeat
     thresholds: Mapping[str, float] = {}  # per-sound; empty means the global default
     code = EXIT_OK
@@ -86,10 +91,13 @@ async def run_sensor(
             async for chunk in mic:
                 for window in windower.push(chunk):
                     scores = await asyncio.to_thread(classifier.scores, window)
+                    at = monotonic()
+                    if clip.observe(window, at):
+                        log.warning(CLIPPING_MESSAGE)
                     playing = False
                     if detector.playback_matters(scores, enabled, thresholds):
                         playing = await asyncio.to_thread(probe.playing)
-                    for d in detector.process(scores, monotonic(), enabled, playing, thresholds):
+                    for d in detector.process(scores, at, enabled, playing, thresholds):
                         log.info("detected %s (%.2f)", d.sound, d.confidence)
                         # Stamped after inference: lags the sound by a few ms (plus the
                         # window length), well within the server's tolerance.
@@ -108,7 +116,7 @@ async def run_sensor(
         said_404 = False
         while True:
             try:
-                dc = await client.heartbeat()
+                dc = await client.heartbeat(mic_clipping=clip.clipping())
             except DeviceRevoked:
                 log.error(REVOKED_MESSAGE)
                 fatal(EXIT_REVOKED)

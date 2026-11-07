@@ -352,3 +352,19 @@ def test_sensor_cards_refresh_from_the_server_every_30_s(page, live):
     with page.expect_response(re.compile(r"/devices$")):
         page.clock.fast_forward(31_000)
     expect(card).to_contain_text("Listening")
+
+
+def test_sensor_card_shows_mic_overloading_note(page, live):
+    m = _member(live)
+    hall, attic = _device(live, m, "Hall"), _device(live, m, "Attic")
+    r = httpx.post(
+        f"{live.base_url}/device/heartbeat", headers=hall.key, json={"mic_clipping": True}
+    )
+    assert r.status_code == 200, r.text
+    _heartbeat(live, attic)
+    _open(page, m)
+    expect(_sensor(page, "Hall").locator(".sensor-note")).to_have_text(
+        "Microphone is overloading — lower its input level"
+    )
+    expect(_sensor(page, "Attic")).to_contain_text("Listening")
+    expect(_sensor(page, "Attic").locator(".sensor-note")).to_have_count(0)

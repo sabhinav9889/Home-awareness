@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String, false, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -27,6 +27,8 @@ class Device(Base):
     key_hash: Mapped[str] = mapped_column(String(64), unique=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    # Reported by the sensor's heartbeat: its microphone input level is high enough to clip.
+    mic_clipping: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
