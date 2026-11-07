@@ -141,13 +141,7 @@ class ServerClient:
         except httpx.HTTPError as e:
             # type name only: keep URLs/headers out of the message
             raise ServerUnavailable(type(e).__name__) from None
-        if resp.status_code == 401:
-            raise DeviceRevoked()
-        if resp.status_code == 429:
-            raise RateLimited(_retry_after(resp))
-        if resp.status_code >= 500:
-            raise ServerUnavailable(f"HTTP {resp.status_code}")
-        return resp
+        return self._check(resp)
 
     async def pair(self, code: str) -> tuple[int, str]:
         try:
@@ -164,8 +158,32 @@ class ServerClient:
         except (ValueError, KeyError, TypeError, AttributeError):
             raise ServerUnavailable("malformed pair response") from None
 
+    @staticmethod
+    def _check(resp: httpx.Response) -> httpx.Response:
+        """Map the status codes every device request shares to exceptions."""
+        if resp.status_code == 401:
+            raise DeviceRevoked()
+        if resp.status_code == 429:
+            raise RateLimited(_retry_after(resp))
+        if resp.status_code >= 500:
+            raise ServerUnavailable(f"HTTP {resp.status_code}")
+        return resp
+
     async def heartbeat(self, mic_clipping: bool = False) -> DeviceConfig:
         resp = await self._post("/device/heartbeat", {"mic_clipping": mic_clipping})
+        return self._device_config(resp, "heartbeat")
+
+    async def config(self) -> DeviceConfig:
+        """The device's sound config without a heartbeat (not rate-limited, no side effects)."""
+        headers = {"X-Device-Key": self._key} if self._key else {}
+        try:
+            resp = await self._http.get(self._base + "/device/config", headers=headers)
+        except httpx.HTTPError as e:
+            raise ServerUnavailable(type(e).__name__) from None
+        return self._device_config(self._check(resp), "config")
+
+    @staticmethod
+    def _device_config(resp: httpx.Response, what: str) -> DeviceConfig:
         if resp.status_code != 200:
             raise _rejected(resp)
         try:
@@ -175,7 +193,7 @@ class ServerClient:
                 frozenset(data["enabled_sounds"]), int(data["heartbeat_interval_s"]), thresholds
             )
         except (ValueError, KeyError, TypeError, AttributeError):
-            raise ServerUnavailable("malformed heartbeat response") from None
+            raise ServerUnavailable(f"malformed {what} response") from None
 
     async def send_event(self, sound: str, confidence: float, occurred_at: datetime) -> EventResult:
         if occurred_at.utcoffset() is None:

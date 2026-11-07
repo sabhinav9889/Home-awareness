@@ -58,7 +58,7 @@ class Detector:
         self._last_emit: dict[str, float] = {}
         self._held: dict[str, Detection] = {}
 
-    def _base(self, sound: str, thresholds: Mapping[str, float] | None) -> float:
+    def threshold(self, sound: str, thresholds: Mapping[str, float] | None = None) -> float:
         """The sound's threshold from the server, else the global default. Received values
         are clamped into [MIN_THRESHOLD, MAX_THRESHOLD]; non-finite ones are ignored."""
         t = thresholds.get(sound) if thresholds else None
@@ -82,7 +82,7 @@ class Detector:
         for sound, rules in self._index.items():
             if sound not in enabled:
                 continue
-            base = self._base(sound, thresholds)
+            base = self.threshold(sound, thresholds)
             boosted = min(base + self._boost, MAX_THRESHOLD)
             if base <= sound_confidence(scores, rules) < boosted:
                 return True
@@ -107,7 +107,7 @@ class Detector:
         for sound, rules in self._index.items():
             if sound not in enabled:
                 continue
-            limit = min(self._base(sound, thresholds) + boost, MAX_THRESHOLD)
+            limit = min(self.threshold(sound, thresholds) + boost, MAX_THRESHOLD)
             conf = sound_confidence(scores, rules)
             hit = conf >= limit
             held = self._held.pop(sound, None)

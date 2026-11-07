@@ -112,6 +112,110 @@ def _cmd_devices(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _pick_mic(flag: str | None, pinned: str | None, command: str):
+    """The microphone to use (an ``InputDevice``), or an exit code after printing why."""
+    from ha_edge import audio
+
+    try:
+        devices = audio.list_inputs()
+    except RuntimeError as e:
+        _err(f"Cannot list microphones: {e}")
+        return EXIT_ERROR
+    wanted = flag if flag is not None else pinned
+    if flag is None and pinned is not None:
+        # A pinned name must match exactly: never drift to a similarly named input.
+        devices_to_search = [d for d in devices if d.name == pinned]
+    else:
+        devices_to_search = devices
+    try:
+        return audio.resolve_device(wanted, devices_to_search)
+    except audio.MicNotFound as e:
+        which = repr(e.name) if e.name else "default microphone"
+        _err(
+            f"Microphone {which} not found; not switching to another input. "
+            f"Available: {', '.join(d.name for d in devices) or 'none'}. "
+            f"Use `ha-sensor {command} --mic NAME` to choose one."
+        )
+        return EXIT_MIC_LOST
+
+
+def _check_thresholds(cfg) -> tuple[dict[str, float], frozenset[str] | None]:
+    """The household's thresholds and enabled sounds, or defaults if unpaired/unreachable."""
+    from ha_edge import api
+
+    default = "using the default threshold (0.30) for every sound."
+    if cfg is None:
+        print(f"Not paired: {default}")
+        return {}, None
+
+    async def fetch():
+        client = api.ServerClient(cfg.base_url, cfg.device_key)
+        try:
+            return await client.config()
+        finally:
+            await client.aclose()
+
+    try:
+        dc = asyncio.run(fetch())
+    except api.ApiError as e:
+        print(f"Cannot get your household's thresholds from {cfg.base_url} ({e}); {default}")
+        return {}, None
+    print(f"Using your household's thresholds from {cfg.base_url}.")
+    return dict(dc.thresholds), dc.enabled_sounds
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    import httpx
+
+    from ha_edge import audio, check, config, model
+
+    try:
+        cfg = config.load_sensor()
+    except config.ConfigError as e:
+        _err(str(e))
+        return EXIT_USAGE
+    device = _pick_mic(args.mic, cfg.mic_name if cfg else None, "check")
+    if isinstance(device, int):
+        return device
+    thresholds, enabled = _check_thresholds(cfg)
+    try:
+        classifier = model.YamnetClassifier(model.fetch_model())
+    except (OSError, ValueError, RuntimeError, httpx.HTTPError, model.ModelIntegrityError) as e:
+        _err(f"Cannot load the sound model: {e}")
+        return EXIT_ERROR
+    print(
+        f"Listening on: {device.description or device.name} for {args.seconds:g} s. "
+        "Make the sound now. Nothing is recorded or sent.\n"
+        f"Per window: level, peak, top 3 YAMNet classes | catalog sounds ({TICK_LEGEND})",
+        flush=True,
+    )
+    try:
+        asyncio.run(
+            check.run_check(
+                classifier,
+                audio.MicStream(device),
+                seconds=args.seconds,
+                thresholds=thresholds,
+                enabled=enabled,
+                out=lambda line: print(line, flush=True),
+            )
+        )
+    except audio.MicLost as e:
+        _err(f"Microphone lost: {e}")
+        return EXIT_MIC_LOST
+    return EXIT_OK
+
+
+TICK_LEGEND = "✓ = would be reported, (off) = nobody turned it on"
+
+
+def _positive_seconds(text: str) -> float:
+    value = float(text)
+    if not value > 0 or value > 600:
+        raise argparse.ArgumentTypeError("must be more than 0 and at most 600")
+    return value
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     from ha_edge import api, audio, config, model, playback, sensor
 
@@ -124,27 +228,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         _err("Not paired. Run `ha-sensor pair --server URL --code CODE` first.")
         return EXIT_NOT_PAIRED
 
-    try:
-        devices = audio.list_inputs()
-    except RuntimeError as e:
-        _err(f"Cannot list microphones: {e}")
-        return EXIT_ERROR
-    wanted = args.mic if args.mic is not None else cfg.mic_name
-    if args.mic is None and cfg.mic_name is not None:
-        # A pinned name must match exactly: never drift to a similarly named input.
-        devices_to_search = [d for d in devices if d.name == cfg.mic_name]
-    else:
-        devices_to_search = devices
-    try:
-        device = audio.resolve_device(wanted, devices_to_search)
-    except audio.MicNotFound as e:
-        which = repr(e.name) if e.name else "default microphone"
-        _err(
-            f"Microphone {which} not found; not switching to another input. "
-            f"Available: {', '.join(d.name for d in devices) or 'none'}. "
-            "Use `ha-sensor run --mic NAME` to choose one."
-        )
-        return EXIT_MIC_LOST
+    device = _pick_mic(args.mic, cfg.mic_name, "run")
+    if isinstance(device, int):
+        return device
     if cfg.mic_name != device.name:
         cfg.mic_name = device.name
         config.save_sensor(cfg)
@@ -191,11 +277,19 @@ def sensor_main(argv: Sequence[str] | None = None) -> int:
     sub.add_parser("fetch-model", help="download and verify the YAMNet model")
     r = sub.add_parser("run", help="listen and send detected sounds")
     r.add_argument("--mic", help="microphone name (or unique part of it); saved for next time")
+    c = sub.add_parser(
+        "check", help="show what the microphone hears (level, clipping, scores); sends nothing"
+    )
+    c.add_argument(
+        "--seconds", type=_positive_seconds, default=15.0, help="how long to listen (default 15)"
+    )
+    c.add_argument("--mic", help="microphone name (default: the pinned one); not saved")
     args = parser.parse_args(argv)
     commands = {
         "pair": _cmd_pair,
         "devices": _cmd_devices,
         "run": _cmd_run,
+        "check": _cmd_check,
         "fetch-model": _cmd_fetch_model,
     }
     try:

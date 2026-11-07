@@ -59,6 +59,34 @@ async def test_heartbeat_parses_config(client):
 
 
 @respx.mock
+async def test_config_reads_device_config_without_a_heartbeat(client):
+    route = respx.get(f"{BASE}/device/config").respond(
+        200,
+        json={
+            "enabled_sounds": ["doorbell"],
+            "heartbeat_interval_s": 60,
+            "thresholds": {"doorbell": 0.4},
+        },
+    )
+    cfg = await client.config()
+    assert cfg == DeviceConfig(frozenset({"doorbell"}), 60, {"doorbell": 0.4})
+    assert route.calls[0].request.headers["X-Device-Key"] == "secret-key-123"
+
+
+@respx.mock
+async def test_config_errors_map_like_heartbeat(client):
+    respx.get(f"{BASE}/device/config").respond(401)
+    with pytest.raises(DeviceRevoked):
+        await client.config()
+    respx.get(f"{BASE}/device/config").respond(503)
+    with pytest.raises(ServerUnavailable):
+        await client.config()
+    respx.get(f"{BASE}/device/config").respond(200, json={"nope": 1})
+    with pytest.raises(ServerUnavailable):
+        await client.config()
+
+
+@respx.mock
 async def test_heartbeat_reports_mic_clipping(client):
     route = respx.post(f"{BASE}/device/heartbeat").respond(
         200, json={"enabled_sounds": [], "heartbeat_interval_s": 60}

@@ -651,3 +651,104 @@ def test_agent_relogin_save_failure_revokes_the_new_token_and_keeps_the_old(
     assert "Logged in" not in out.out
     for secret in (JWT, PASSWORD, AGENT_TOKEN, "ha_agent_old"):
         assert secret not in out.out + out.err
+
+
+# --- check -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def check_env(cfgdir, monkeypatch):
+    from ha_edge import audio, check, model
+
+    calls = {}
+    monkeypatch.setattr(audio, "list_inputs", lambda: DEVICES)
+    monkeypatch.setattr(model, "fetch_model", lambda *a, **k: "p")
+
+    class FakeClf:
+        def __init__(self, path):
+            self.class_names = []
+
+    monkeypatch.setattr(model, "YamnetClassifier", FakeClf)
+
+    async def fake_check(classifier, mic, *, seconds, thresholds, enabled=None, out=print):
+        calls.update(mic=mic, seconds=seconds, thresholds=thresholds, enabled=enabled)
+        out("level 0.100 peak 0.10 | Speech 0.90 | -")
+        return calls.get("result")
+
+    monkeypatch.setattr(check, "run_check", fake_check)
+    return calls
+
+
+def test_check_unpaired_uses_default_mic_and_default_thresholds(check_env, capsys):
+    assert cli.sensor_main(["check", "--seconds", "5"]) == 0
+    assert check_env["mic"].device.name == "alsa_input.pci.analog"
+    assert check_env["seconds"] == 5
+    assert check_env["thresholds"] == {} and check_env["enabled"] is None
+    out = capsys.readouterr().out
+    assert "Not paired: using the default threshold (0.30)" in out
+    assert "Built-in Audio Analog Stereo" in out and "Nothing is recorded or sent" in out
+    assert "level 0.100" in out
+
+
+@respx.mock
+def test_check_paired_uses_pinned_mic_and_server_thresholds_without_pinning(check_env, capsys):
+    config.save_sensor(config.SensorConfig("http://srv", 42, KEY, "alsa_input.usb.headset"))
+    route = respx.get("http://srv/device/config").respond(
+        200,
+        json={
+            "enabled_sounds": ["doorbell"],
+            "heartbeat_interval_s": 60,
+            "thresholds": {"doorbell": 0.4},
+        },
+    )
+    assert cli.sensor_main(["check"]) == 0
+    assert route.called
+    assert check_env["mic"].device.name == "alsa_input.usb.headset"
+    assert check_env["seconds"] == 15  # default
+    assert check_env["thresholds"] == {"doorbell": 0.4}
+    assert check_env["enabled"] == frozenset({"doorbell"})
+    out = capsys.readouterr()
+    assert "Using your household's thresholds from http://srv" in out.out
+    assert KEY not in out.out + out.err
+
+
+@respx.mock
+def test_check_mic_flag_does_not_change_the_pin(check_env):
+    config.save_sensor(config.SensorConfig("http://srv", 42, KEY, "alsa_input.pci.analog"))
+    respx.get("http://srv/device/config").respond(503)
+    assert cli.sensor_main(["check", "--mic", "usb"]) == 0
+    assert check_env["mic"].device.name == "alsa_input.usb.headset"
+    assert config.load_sensor().mic_name == "alsa_input.pci.analog"
+
+
+@respx.mock
+def test_check_server_unreachable_falls_back_to_defaults(check_env, capsys):
+    config.save_sensor(config.SensorConfig("http://srv", 42, KEY))
+    respx.get("http://srv/device/config").mock(side_effect=httpx.ConnectError("x"))
+    assert cli.sensor_main(["check"]) == 0
+    assert check_env["thresholds"] == {} and check_env["enabled"] is None
+    assert "using the default threshold (0.30)" in capsys.readouterr().out
+
+
+def test_check_missing_pinned_mic_exits_4(check_env, capsys):
+    config.save_sensor(config.SensorConfig("http://srv", 42, KEY, "alsa_input.gone"))
+    assert cli.sensor_main(["check"]) == 4
+    assert "mic" not in check_env
+    assert "alsa_input.gone" in capsys.readouterr().err
+
+
+def test_check_mic_lost_exits_4(check_env, monkeypatch, capsys):
+    from ha_edge import audio, check
+
+    async def lost(*a, **k):
+        raise audio.MicLost("unplugged")
+
+    monkeypatch.setattr(check, "run_check", lost)
+    assert cli.sensor_main(["check"]) == 4
+    assert "Microphone lost" in capsys.readouterr().err
+
+
+def test_check_rejects_non_positive_seconds(check_env):
+    with pytest.raises(SystemExit) as e:
+        cli.sensor_main(["check", "--seconds", "0"])
+    assert e.value.code == 2

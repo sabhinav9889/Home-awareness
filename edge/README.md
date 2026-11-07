@@ -73,6 +73,30 @@ What to know:
   10 minutes). If the laptop's clock is more than 10 minutes off, every event is rejected:
   fix the system time. A wrong `--server` shows up as an HTTP 404.
 
+## Check your microphone
+
+Before relying on the sensor, check what it hears (it can run while `ha-sensor run` is
+running; nothing is recorded or sent):
+
+    uv run ha-sensor check                 # 15 s on the pinned (or default) microphone
+    uv run ha-sensor check --seconds 30 --mic "USB"   # another input; the pin is not changed
+
+Make the sounds you care about (ring the doorbell, clap, shout) while it listens. About
+twice a second it prints the input **level** (RMS) and **peak**, a **CLIPPING** marker
+when at least 1 % of samples hit full scale, YAMNet's top three classes, and the catalog
+sounds scoring 0.05 or more: `✓` means the sensor would report it under your household's
+current thresholds (fetched from the server when paired, else 0.30), `(off)` means nobody
+turned that sound on. A summary follows: loudest level and peak, how many windows clipped,
+the best score per sound, and one line of advice.
+
+- **Clipping** (peaks at 1.00): the input level is too high, and loud sounds get
+  distorted beyond recognition (a shouted scream was heard as snoring and coughing).
+  Lower it, e.g. `wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 0.3`, and check again. While
+  running, the sensor also warns in its log (at most every 5 minutes) and the dashboard
+  shows "Microphone is overloading" on the sensor's card.
+- **Too quiet** (the loudest peak stays under 0.10): raise it, e.g.
+  `wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 0.7`, or move the laptop closer.
+
 `ha-sensor` exit codes: 0 stopped normally, 1 network or model error (or the microphones
 can't be listed), 2 usage error, unusable config, pairing refused or rate limited, 3 not
 paired, 4 microphone not found or lost, 5 this sensor was removed from the household (pair
