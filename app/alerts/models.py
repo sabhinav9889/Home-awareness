@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.auth.models import Member  # noqa: F401  (registers members table)
@@ -12,6 +12,12 @@ class Alert(Base):
     __tablename__ = "alerts"
     __table_args__ = (
         CheckConstraint("status IN ('pending','delivering','sent','partial','failed')"),
+        # The stale sweep scans unfinished alerts by age; keep that cheap as history grows.
+        Index(
+            "ix_alerts_unfinished_created_at",
+            "created_at",
+            postgresql_where=text("status IN ('pending', 'delivering')"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
