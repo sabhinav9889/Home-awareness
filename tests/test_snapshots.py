@@ -25,6 +25,7 @@ from tests.test_delivery import TG_URL, TOKEN, _alert, _prefs, _run
 settings = td.settings
 factory = td.factory
 published = td.published
+sleeps = td.sleeps
 
 pytestmark = pytest.mark.usefixtures("frozen_ratelimit_clock")
 
@@ -70,7 +71,9 @@ async def test_multipart_event_stores_encrypted_snapshot(client, signed_up, sess
     assert r.status_code == 202, r.text
     (snap,) = await _snapshots(session)
     assert snap.event_id == r.json()["event_id"] and snap.household_id == member.household_id
-    assert snap.size_bytes == len(JPEG) and snap.path.startswith(f"{member.household_id}/")
+    assert snap.size_bytes == len(_read(snapshot_env, snap)) > len(JPEG) and snap.path.startswith(
+        f"{member.household_id}/"
+    )
     raw = _read(snapshot_env, snap)
     assert raw != JPEG and JPEG[:16] not in raw
     assert Fernet(snapshot_env.snapshot_key.encode()).decrypt(raw) == JPEG
@@ -261,7 +264,13 @@ async def test_sweep_deletes_snapshots_past_household_retention(
     _age(session, old, days=2)
     _age(session, mid, hours=23)
     await session.flush()
-    # Retention 30 -> 1 day: the 2-day-old image goes on the next sweep, the 23 h one stays.
+    # Retention 30: nothing is due. Then 30 -> 1 day: the 2-day-old image goes on the next
+    # sweep, the 23 h one stays.
+    assert (
+        await client.patch("/households/me", json={"snapshot_retention_days": 30}, headers=h)
+    ).status_code == 200
+    assert await sweep_snapshots(session, datetime.now(UTC)) == 0
+    assert len(await _snapshots(session)) == 3
     assert (
         await client.patch("/households/me", json={"snapshot_retention_days": 1}, headers=h)
     ).status_code == 200
@@ -292,7 +301,7 @@ async def test_sweep_uses_each_households_own_retention(client, signed_up, sessi
 
 
 async def test_cap_evicts_oldest_first(client, signed_up, session, snapshot_env, monkeypatch):
-    monkeypatch.setattr(store, "CAP_BYTES", 5000)
+    monkeypatch.setattr(store, "CAP_BYTES", 6000)
     _, h = await signed_up()
     _, dk = await _camera(client, h)
     ids = []
@@ -453,3 +462,171 @@ async def test_lost_file_degrades_to_text_alert(
     await _run(alert, factory, redis)
     assert not photo.called and msg.call_count == 1
     assert published[0][1]["has_snapshot"] is False
+
+
+# --- fix round ---
+
+
+async def _files(env):
+    out = []
+    for root, _, names in os.walk(env.snapshot_dir):
+        out += [os.path.join(root, n) for n in names]
+    return out
+
+
+async def test_enforce_cap_failure_leaves_event_without_snapshot_or_file(
+    client, signed_up, session, snapshot_env, monkeypatch
+):
+    from sqlalchemy.exc import OperationalError
+
+    async def boom(*a, **k):
+        raise OperationalError("SELECT", {}, Exception("db gone"))
+
+    monkeypatch.setattr(store, "enforce_cap", boom)
+    _, h = await signed_up()
+    _, dk = await _camera(client, h)
+    r = await _post(client, dk)
+    assert r.status_code == 202, r.text
+    assert await session.get(Event, r.json()["event_id"]) is not None
+    assert await _snapshots(session) == [] and await _files(snapshot_env) == []
+
+
+async def test_evicted_files_deleted_only_after_commit(
+    client, signed_up, session, snapshot_env, monkeypatch
+):
+    monkeypatch.setattr(store, "CAP_BYTES", 6000)
+    _, h = await signed_up()
+    _, dk = await _camera(client, h)
+    await _post(client, dk)
+    (first,) = await _snapshots(session)
+    first_path = os.path.join(snapshot_env.snapshot_dir, first.path)
+    first.created_at = datetime.now(UTC) - timedelta(hours=1)
+    await session.flush()
+    await _post(client, dk)
+    assert os.path.exists(first_path)  # 2 x ~2.7 KB fits
+    seen = []
+    real = store.delete_deferred_files
+
+    async def spy(sess):
+        seen.append(list(sess.info.get(store.DEFERRED, [])))
+        await real(sess)
+
+    monkeypatch.setattr(store, "delete_deferred_files", spy)
+    await _post(client, dk)  # third overflows: oldest evicted, file removed post-commit
+    assert seen[-1] == [first.path] and not os.path.exists(first_path)
+
+
+async def test_save_failure_midway_rolls_back_row_and_deletes_new_file(
+    client, signed_up, session, snapshot_env, monkeypatch
+):
+    _, h = await signed_up()
+    _, dk = await _camera(client, h)
+    ev = (await _post(client, dk, image=None)).json()["event_id"]
+    member_hh = (await session.get(Event, ev)).household_id
+
+    async def boom(*a, **k):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(store, "enforce_cap", boom)
+    assert await store.save(session, member_hh, ev, JPEG) is None
+    assert await _snapshots(session) == [] and await _files(snapshot_env) == []
+
+
+@respx.mock
+async def test_telegram_timeout_on_photo_does_not_fall_back(
+    signed_up, session, factory, redis, published, sleeps
+):
+    member, _ = await signed_up()
+    await _prefs(session, member, telegram=True, telegram_chat_id="42")
+    alert = await _with_snapshot(session, member)
+    photo = respx.post(f"https://api.telegram.org/bot{TOKEN}/sendPhoto").mock(
+        side_effect=httpx.ReadTimeout("slow")
+    )
+    msg = respx.post(TG_URL).mock(return_value=httpx.Response(200, json={"ok": True}))
+    await _run(alert, factory, redis, sleeps)
+    assert photo.call_count == 3 and not msg.called  # normal retries, never the text path
+
+
+@respx.mock
+async def test_telegram_ok_false_falls_back_once(signed_up, session, factory, redis, published):
+    member, _ = await signed_up()
+    await _prefs(session, member, telegram=True, telegram_chat_id="42")
+    alert = await _with_snapshot(session, member)
+    respx.post(f"https://api.telegram.org/bot{TOKEN}/sendPhoto").mock(
+        return_value=httpx.Response(200, json={"ok": False, "description": "no"})
+    )
+    msg = respx.post(TG_URL).mock(return_value=httpx.Response(200, json={"ok": True}))
+    await _run(alert, factory, redis)
+    assert msg.call_count == 1
+
+
+@respx.mock
+@pytest.mark.parametrize("status", [400, 413])
+async def test_ntfy_4xx_on_attachment_falls_back_to_text(
+    signed_up, session, factory, redis, published, status
+):
+    member, _ = await signed_up()
+    await _prefs(session, member, ntfy_topic="my-topic")
+    alert = await _with_snapshot(session, member)
+    put = respx.put("https://ntfy.test/my-topic").mock(return_value=httpx.Response(status))
+    post = respx.post("https://ntfy.test/my-topic").mock(return_value=httpx.Response(200))
+    await _run(alert, factory, redis)
+    assert put.call_count == 1 and post.call_count == 1
+    assert b"Scream detected" in post.calls[0].request.content
+    assert post.calls[0].request.headers["Priority"] == "urgent"
+
+
+@respx.mock
+async def test_ntfy_transport_error_on_attachment_does_not_fall_back(
+    signed_up, session, factory, redis, published, sleeps
+):
+    member, _ = await signed_up()
+    await _prefs(session, member, ntfy_topic="my-topic")
+    alert = await _with_snapshot(session, member)
+    put = respx.put("https://ntfy.test/my-topic").mock(side_effect=httpx.ConnectError("down"))
+    post = respx.post("https://ntfy.test/my-topic").mock(return_value=httpx.Response(200))
+    await _run(alert, factory, redis, sleeps)
+    assert put.call_count == 3 and not post.called
+
+
+async def test_realistic_oversize_jpeg_is_dropped_not_refused(client, signed_up, session):
+    _, h = await signed_up()
+    _, dk = await _camera(client, h)
+    r = await _post(client, dk, make_jpeg(1_500_000))
+    assert r.status_code == 202, r.text
+    assert await session.get(Event, r.json()["event_id"]) is not None
+    assert await _snapshots(session) == []
+
+
+async def test_multipart_hard_limit_and_length_required(client, signed_up, session):
+    _, h = await signed_up()
+    _, dk = await _camera(client, h)
+    r = await _post(client, dk, make_jpeg(8 * 1024 * 1024 + 10))
+    assert r.status_code == 413
+
+    async def chunks():
+        yield b"--x\r\n"
+
+    r = await client.post(
+        "/device/events",
+        content=chunks(),
+        headers={**dk, "Content-Type": "multipart/form-data; boundary=x"},
+    )
+    assert r.status_code == 411
+    assert (await session.scalar(select(func.count()).select_from(Event))) == 0
+
+
+async def test_multipart_incident_key_is_422(client, signed_up, session):
+    _, h = await signed_up()
+    _, dk = await _camera(client, h)
+    body = json.dumps(
+        {
+            "type": "incident_break_in",
+            "confidence": 0.9,
+            "occurred_at": datetime.now(UTC).isoformat(),
+        }
+    )
+    r = await client.post(
+        "/device/events", files={"event": (None, body), "snapshot": ("s.jpg", JPEG)}, headers=dk
+    )
+    assert r.status_code == 422

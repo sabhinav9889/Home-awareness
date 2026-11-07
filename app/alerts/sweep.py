@@ -57,7 +57,12 @@ async def sweep_snapshots(session: AsyncSession, now: datetime) -> int:
     """Delete snapshots past their household's retention, then files nothing refers to.
     Cross-household sweep (sanctioned Tenant bypass; it only deletes by age). One commit."""
     expired = await store.purge_expired(session, now)
-    await session.commit()
+    try:
+        await session.commit()
+    except BaseException:
+        store.forget_deferred_files(session)
+        raise
+    await store.delete_deferred_files(session)  # only now are the rows really gone
     orphans = await store.purge_orphans(session, now)
     if expired or orphans:
         log.info("snapshot sweep: %d expired, %d orphan file(s) removed", expired, orphans)

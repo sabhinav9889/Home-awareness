@@ -19,6 +19,12 @@ async def send_message(http: httpx.AsyncClient, token: str, chat_id: str, text: 
         raise DeliveryError(f"telegram {r.status_code}: {data.get('description', 'error')}")
 
 
+class PhotoRefused(DeliveryError):
+    """Telegram answered and said no to the photo (ok: false, or a 4xx). Only this falls back
+    to plain text: a timeout or connection error proves nothing about delivery, so the
+    caller's normal retry applies instead (a text fallback could duplicate the alert)."""
+
+
 async def send_photo(
     http: httpx.AsyncClient, token: str, chat_id: str, jpeg: bytes, caption: str
 ) -> None:
@@ -35,7 +41,10 @@ async def send_photo(
     except ValueError:
         data = {}
     if r.status_code != 200 or not data.get("ok"):
-        raise DeliveryError(f"telegram {r.status_code}: {data.get('description', 'error')}")
+        error = f"telegram {r.status_code}: {data.get('description', 'error')}"
+        if 400 <= r.status_code < 500 or data.get("ok") is False:
+            raise PhotoRefused(error)
+        raise DeliveryError(error)
 
 
 async def send_photo_or_message(
@@ -44,5 +53,5 @@ async def send_photo_or_message(
     """The alert with its photo; if Telegram refuses the photo, the plain text goes instead."""
     try:
         await send_photo(http, token, chat_id, jpeg, text)
-    except DeliveryError:
+    except PhotoRefused:
         await send_message(http, token, chat_id, text)

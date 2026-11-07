@@ -24,17 +24,22 @@ async def publish(
     attachment: bytes | None = None,
 ) -> None:
     """A text notification, or with `attachment` (a JPEG) a PUT upload whose Message header
-    carries the text."""
+    carries the text. If ntfy answers the upload with a 4xx (too large, refused), the plain
+    text is sent instead; a transport error does not fall back (nothing proves it failed)."""
     headers = {"Priority": priority}
     if tags:
         headers["Tags"] = tags
     url = f"{base_url.rstrip('/')}/{topic}"
     try:
-        if attachment is None:
+        r = None
+        if attachment is not None:
+            r = await http.put(
+                url,
+                content=attachment,
+                headers={**headers, "Filename": "snapshot.jpg", "Message": _header(text)},
+            )
+        if r is None or 400 <= r.status_code < 500:
             r = await http.post(url, content=text.encode(), headers=headers)
-        else:
-            headers.update({"Filename": "snapshot.jpg", "Message": _header(text)})
-            r = await http.put(url, content=attachment, headers=headers)
     except httpx.HTTPError as e:
         raise DeliveryError(f"ntfy request failed: {type(e).__name__}") from None
     if r.status_code != 200:

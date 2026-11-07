@@ -28,9 +28,11 @@ from app.tenancy import Tenant, get_tenant
 router = APIRouter(tags=["events"])
 
 HOUSEHOLD_EVENTS_PER_MINUTE = 300
-# A multipart upload bigger than this is refused up front (the JPEG limit is 300 KB; the rest
-# is the small JSON part and framing). Over-size images below it are dropped, event kept.
-MAX_UPLOAD_BYTES = 1024 * 1024
+# Hard limit for a whole multipart request. Bigger is refused (413, or 411 with no
+# Content-Length); anything under it is parsed, and an image over 300 KB is dropped with the
+# event kept. 8 MB covers a realistic phone JPEG so those are dropped, not refused.
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+MAX_EVENT_PART_BYTES = 64 * 1024  # the JSON part; Starlette applies this to non-file fields
 
 
 async def _read_event(request: Request) -> tuple[EventIn, bytes | None]:
@@ -41,20 +43,27 @@ async def _read_event(request: Request) -> tuple[EventIn, bytes | None]:
     jpeg: bytes | None = None
     try:
         if is_multipart:
+            # Content-Length is trustworthy (the server stops reading at it), so requiring it
+            # bounds chunked uploads too: no length, no parse (411). Streaming a byte count
+            # would have worked as well, but needs a re-implementation of the form parse.
             length = request.headers.get("content-length")
-            if length and length.isdigit() and int(length) > MAX_UPLOAD_BYTES:
+            if not length or not length.isdigit():
+                raise HTTPException(status_code=411, detail="Content-Length required")
+            if int(length) > MAX_UPLOAD_BYTES:
                 raise HTTPException(status_code=413, detail="upload too large")
-            form = await request.form(max_part_size=MAX_UPLOAD_BYTES)
-            part = form.get("event")
-            if isinstance(part, UploadFile):
-                part = (await part.read(MAX_UPLOAD_BYTES)).decode("utf-8", "replace")
-            if not isinstance(part, str):
-                raise RequestValidationError(
-                    [{"type": "missing", "loc": ("body", "event"), "msg": "Field required"}]
-                )
-            image = form.get("snapshot")
-            if isinstance(image, UploadFile):
-                jpeg = await image.read(store.MAX_BYTES + 1)  # +1: detect "too big"
+            async with request.form(
+                max_part_size=MAX_EVENT_PART_BYTES
+            ) as form:  # closes temp files
+                part = form.get("event")
+                if isinstance(part, UploadFile):
+                    part = (await part.read(MAX_EVENT_PART_BYTES)).decode("utf-8", "replace")
+                if not isinstance(part, str):
+                    raise RequestValidationError(
+                        [{"type": "missing", "loc": ("body", "event"), "msg": "Field required"}]
+                    )
+                image = form.get("snapshot")
+                if isinstance(image, UploadFile):
+                    jpeg = await image.read(store.MAX_BYTES + 1)  # +1: detect "too big"
             raw = part.encode()
         else:
             raw = await request.body()
@@ -141,9 +150,11 @@ async def post_event(
     try:
         await session.commit()
     except BaseException:
+        store.forget_deferred_files(session)
         if snapshot is not None:
             await store.discard_file(snapshot)
         raise
+    await store.delete_deferred_files(session)  # files of cap-evicted snapshots
     EVENTS_RECEIVED.labels(event.sound_key).inc()
     if event.merged:
         EVENTS_MERGED.inc()

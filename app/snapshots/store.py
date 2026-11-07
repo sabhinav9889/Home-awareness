@@ -67,18 +67,41 @@ def _remove_file(path: str) -> None:
         os.remove(_abs(path))
     except FileNotFoundError:
         pass
-    except Exception:  # noqa: BLE001  a stuck file is retried by the orphan sweep
-        log.warning("could not delete a snapshot file", exc_info=True)
+    except Exception as e:  # noqa: BLE001  a stuck file is retried by the orphan sweep
+        # Type only: an OSError message embeds the path.
+        log.warning("could not delete a snapshot file (%s)", type(e).__name__)
+
+
+DEFERRED = "snapshot_files_to_delete"
+
+
+def _defer(session: AsyncSession, paths: list[str]) -> None:
+    session.info.setdefault(DEFERRED, []).extend(paths)
+
+
+async def delete_deferred_files(session: AsyncSession) -> None:
+    """Call AFTER the transaction commits: removes files whose rows (evicted, expired) are
+    now really gone. Before the commit the rows may still come back, so files must stay."""
+    for path in session.info.pop(DEFERRED, []):
+        await asyncio.to_thread(_remove_file, path)
+
+
+def forget_deferred_files(session: AsyncSession) -> None:
+    """Call when the transaction failed: the rows live on, so their files must too."""
+    session.info.pop(DEFERRED, None)
 
 
 async def save(
     session: AsyncSession, household_id: int, event_id: int, jpeg: bytes
 ) -> Snapshot | None:
-    """Validate, encrypt and store `jpeg`; add (and flush) its row in the caller's transaction.
+    """Validate, encrypt and store `jpeg`; add its row in the caller's transaction.
 
-    Returns None, never raises, when the image is unusable or storage fails: a bad image
-    must not fail the event. The file is written before the row; if the caller's commit
-    then fails, it must call `discard_file(snapshot)`."""
+    Returns None, never raises, when the image is unusable or anything about storing it
+    fails: a bad image must not fail the event. The row insert and the cap enforcement run
+    in one savepoint, so a failure discards both and the new file is deleted. Files of rows
+    evicted by the cap are only queued; the caller removes them after its commit with
+    `delete_deferred_files`. If the commit fails, call `discard_file(snapshot)` and
+    `forget_deferred_files(session)`."""
     if len(jpeg) > MAX_BYTES or not is_jpeg(jpeg):
         return None
     path: str | None = None
@@ -87,17 +110,22 @@ async def save(
         if fernet is None:
             return None
         path = f"{household_id}/{uuid.uuid4().hex}.bin"
-        await asyncio.to_thread(_write_file, path, fernet.encrypt(jpeg))
+        data = fernet.encrypt(jpeg)
+        await asyncio.to_thread(_write_file, path, data)
+        # size_bytes is the on-disk (ciphertext) size, so the cap counts real disk use.
         snap = Snapshot(
-            household_id=household_id, event_id=event_id, size_bytes=len(jpeg), path=path
+            household_id=household_id, event_id=event_id, size_bytes=len(data), path=path
         )
-        async with session.begin_nested():  # a failed insert must not poison the event's txn
+        async with session.begin_nested():
             session.add(snap)
-        await session.flush()
-        await enforce_cap(session, household_id)
+            await session.flush()
+            evicted = await enforce_cap(session, household_id)
+        _defer(session, evicted)
         return snap
-    except Exception:  # noqa: BLE001
-        log.warning("could not store a snapshot; the event is kept without it", exc_info=True)
+    except Exception as e:  # noqa: BLE001
+        log.warning(
+            "could not store a snapshot; the event is kept without it (%s)", type(e).__name__
+        )
         if path is not None:
             await asyncio.to_thread(_remove_file, path)
         return None
@@ -128,21 +156,23 @@ async def try_load(snapshot: Snapshot | None) -> bytes | None:
         return None
 
 
-async def delete_snapshot(session: AsyncSession, snapshot: Snapshot) -> None:
+async def _delete_row(session: AsyncSession, snapshot: Snapshot) -> str:
+    """Delete the row; returns its file path, to be removed only after the commit."""
     await session.execute(delete(Snapshot).where(Snapshot.id == snapshot.id))
-    await asyncio.to_thread(_remove_file, snapshot.path)
+    return snapshot.path
 
 
-async def enforce_cap(session: AsyncSession, household_id: int) -> int:
-    """Evict a household's oldest snapshots until it is within CAP_BYTES. Returns the count."""
+async def enforce_cap(session: AsyncSession, household_id: int) -> list[str]:
+    """Delete a household's oldest rows until it is within CAP_BYTES. Returns the evicted
+    files' paths; the caller deletes the files after its commit."""
     total = await session.scalar(
         select(func.coalesce(func.sum(Snapshot.size_bytes), 0)).where(
             Snapshot.household_id == household_id
         )
     )
-    evicted = 0
+    evicted: list[str] = []
     if total <= CAP_BYTES:
-        return 0
+        return evicted
     oldest = await session.scalars(
         select(Snapshot)
         .where(Snapshot.household_id == household_id)
@@ -152,14 +182,14 @@ async def enforce_cap(session: AsyncSession, household_id: int) -> int:
         if total <= CAP_BYTES:
             break
         total -= snap.size_bytes
-        await delete_snapshot(session, snap)
-        evicted += 1
+        evicted.append(await _delete_row(session, snap))
     return evicted
 
 
 async def purge_expired(session: AsyncSession, now: datetime) -> int:
-    """Delete snapshots older than their household's retention (cross-household sweep).
-    Rows and files only; events and alerts are untouched."""
+    """Delete the rows of snapshots older than their household's retention (cross-household
+    sweep); their files are queued and removed by `delete_deferred_files` after the commit.
+    Events and alerts are untouched."""
     removed = 0
     for days in RETENTION_CHOICES:
         rows = await session.scalars(
@@ -171,7 +201,7 @@ async def purge_expired(session: AsyncSession, now: datetime) -> int:
             )
         )
         for snap in list(rows):
-            await delete_snapshot(session, snap)
+            _defer(session, [await _delete_row(session, snap)])
             removed += 1
     return removed
 

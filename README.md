@@ -81,7 +81,8 @@ A camera sensor may attach one JPEG (at most 300 KB, 640 px on the longest side)
    Keep it safe: without it stored snapshots cannot be read. If `SNAPSHOT_KEY` is set but not a valid key, the server refuses to start; if it is unset, events are accepted and images are dropped (one warning in the log).
 2. Images live in the `snapshots` Docker volume (`/data/snapshots`, shared by `api` and `worker`; set `SNAPSHOT_DIR` to move it). Back it up with the database if you want to keep images.
 3. Each household chooses how long images are kept (1, 7 or 30 days, default 7) and is capped at 200 MB; the oldest images go first. The worker's 5-minute sweep applies both, and also removes files left behind by a deleted household or event after a day.
-4. Fetch an image with `GET /snapshots/{event_id}` and a member's Bearer token or an agent token (`Cache-Control: private, no-store`).
+4. Privacy: an ntfy topic is public by name, and ntfy.sh keeps attachments for hours, so anyone who guesses the topic can see the photo. Use a long random topic, a self-hosted ntfy (`NTFY_BASE_URL`), or turn snapshots off for that camera.
+5. Fetch an image with `GET /snapshots/{event_id}` and a member's Bearer token or an agent token (`Cache-Control: private, no-store`).
 
 ## Security
 
