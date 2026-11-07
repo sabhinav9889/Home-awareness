@@ -276,8 +276,19 @@ def test_device_name_is_text_not_html(page, live):
     assert dialogs == []
 
 
-def test_phone_width_shows_the_result_chip_without_scrolling(new_page, live):
-    page = new_page(viewport={"width": 360, "height": 740})
+# CI runners lack the laptop's fonts and fall back to something wider; force that here.
+WIDE_FONT = "* { font-family: 'DejaVu Sans', Verdana, sans-serif !important; }"
+
+
+@pytest.mark.parametrize("wide_font", [False, True], ids=["default-font", "wide-fallback-font"])
+def test_phone_width_shows_the_result_chip_without_scrolling(new_page, live, wide_font):
+    page = new_page(viewport={"width": 360, "height": 740}, bypass_csp=wide_font)
+    if wide_font:
+        page.add_init_script(
+            "document.addEventListener('DOMContentLoaded', () => {"
+            "const s = document.createElement('style');"
+            f"s.textContent = \"{WIDE_FONT}\"; document.head.append(s); }});"
+        )
     m = _member(live)
     hall = _device(live, m, "A sensor with a fairly long name")
     _heartbeat(live, hall)
