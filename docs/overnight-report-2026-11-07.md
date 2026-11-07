@@ -1,5 +1,13 @@
 # Overnight report — 7 Nov 2026
 
+**TL;DR:** Three plans built, reviewed and merged into your local `main` (nothing pushed): the server core, the laptop sensor + alert agent, and six enhancements. 277 server tests + 260 edge tests pass. A fourth plan (the web dashboard) was written and started; it's on branch `plan-3-dashboard`, unmerged. Every decision I made for you is listed below with what it costs if I got it wrong.
+
+### Start here (10 minutes)
+1. `cd ~/home-awareness && git log --oneline | head -40` — the night's work, one focused commit per change.
+2. Read `README.md` (server) and `edge/README.md` (laptop sensor + agent), then `docs/accuracy.md`.
+3. Try it: `cp -n .env.example .env`, put a long random `JWT_SECRET` in `.env`, `REDIS_HOST_PORT=6380 docker compose up --build -d`, then follow "Manual end-to-end" in `README.md` and the quick-start in `edge/README.md`. (6380 because your Heidi project's Redis holds 6379.)
+4. Unmute your speaker and raise the mic level in system settings before testing the laptop as a sensor.
+
 Started 00:20 IST. You authorised autonomous coding, testing, improvements and competitor-driven features until 10:00 AM.
 Limits I kept: no push, no GitHub/cloud accounts, no deploys, no paid services, other projects untouched.
 
@@ -92,6 +100,21 @@ Each is something the plan/spec didn't settle; "cost if wrong" in brackets.
 25. The final fix wave also took 15 small improvements (e.g. "sent" only when someone was actually listening; alerts older than 10 min are dropped instead of arriving late).
 26–27. No "offline" warnings right after the server itself was down; a home whose only sensor or internet died is still warned, after ~13 min instead of 3.
 28. Ran one extra targeted fix round beyond the normal process, because two bugs found at the end would have misled users.
+
+### 🚧 Plan 3 — web dashboard: written, started, NOT merged
+`docs/superpowers/plans/2026-11-07-plan-3-dashboard.md` (6 tasks, plain JavaScript, no frameworks, browser-tested with your installed Chrome). A usage limit paused work from ~05:50 to 09:00; Task 1 (shell, login/sign-up, test harness) was resumed with a 09:25 deadline — see the branch `plan-3-dashboard` and the line below for where it stopped.
+- **Task 1 done and reviewed** (commits `26cd110`, `f2b8e33`): `/app/` serves the dashboard shell; sign-up (with your browser's timezone), email confirm, login, password reset, log out; strict Content-Security-Policy; one-time links are wiped from the address bar after use. **292 tests pass, including 8 real-browser tests in your Chrome.**
+- Tasks 2–6 (overview + live events, alert screen + "I'm on it", sounds & rules, sensors/channels/household, dark mode + phone-width audit) not started — I stopped at 09:17 so nothing would be half-done at 10:00. The branch is clean and green; resume with Task 2.
+
+### What I did NOT do (by your limits)
+No push, no GitHub repo, no cloud accounts, no Oracle/Render setup, no Telegram bot, nothing paid, your other projects untouched, your system audio settings untouched.
+
+## Suggested next steps
+1. Review and push when you're happy (personal GitHub `sabhinav9889`); the commit trailers name the model that wrote each commit.
+2. Finish Plan 3 (dashboard) — 5 tasks left after Task 1.
+3. Plan 4 (deployment: Oracle Always Free + Caddy + DuckDNS + backups + the no-card fallback) — not written yet; needs you for account sign-ups.
+4. Later: phone-as-sensor page (needs a browser build of YAMNet), Home Assistant/MQTT bridge, "catch up on missed alerts after reconnect" for the laptop agent.
+5. The full list of small deferred review notes is in `.superpowers/backlog-*.md` (local, git-ignored).
 
 ## Needs you
 - **Quiet hours:** not built. For a safety tool I think urgent sounds must always break through; tell me if you want quiet hours for non-urgent sounds only.
