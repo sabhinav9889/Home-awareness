@@ -1,6 +1,6 @@
 # Overnight report — 7 Nov 2026
 
-**TL;DR (updated after the dashboard):** Four plans built, reviewed and merged into your local `main` (nothing pushed): the server core, the laptop sensor + alert agent, and six enhancements. 277 server tests + 260 edge tests pass. The web dashboard (Plan 3) was finished after you woke and is merged too. Every decision I made for you is listed below with what it costs if I got it wrong.
+**TL;DR (updated after the dashboard):** Four plans built, reviewed and merged into your local `main` (nothing pushed): the server core, the laptop sensor + alert agent, and six enhancements. 393 server tests (including 115 browser tests) + 260 edge tests pass. The web dashboard (Plan 3) was finished after you woke and is merged too. Every decision I made for you is listed below with what it costs if I got it wrong.
 
 ### Start here (10 minutes)
 1. `cd ~/home-awareness && git log --oneline | head -40` — the night's work, one focused commit per change.
