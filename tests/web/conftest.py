@@ -8,6 +8,7 @@ API tests, the server commits for real, so every web test truncates the tables a
 
 import asyncio
 import contextlib
+import os
 import shutil
 import socket
 import threading
@@ -130,12 +131,21 @@ def live(live_server):
     _run(_truncate_all())
 
 
+def _require_chrome() -> None:
+    """Skip without Chrome, or fail if REQUIRE_CHROME=1 (CI: a silent skip hides the UI tests)."""
+    if shutil.which(CHROME) is not None or shutil.which("google-chrome") is not None:
+        return
+    reason = "Google Chrome is not installed (web tests use channel='chrome')"
+    if os.environ.get("REQUIRE_CHROME") == "1":
+        pytest.fail(f"{reason}, and REQUIRE_CHROME=1", pytrace=False)
+    pytest.skip(reason)
+
+
 @pytest.fixture
 def browser():
     # Function-scoped on purpose: sync Playwright keeps an event loop running in this thread
     # while it is open, which would break every async (pytest-asyncio) test collected after.
-    if shutil.which(CHROME) is None and shutil.which("google-chrome") is None:
-        pytest.skip("Google Chrome is not installed (web tests use channel='chrome')")
+    _require_chrome()
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
