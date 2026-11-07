@@ -37,6 +37,11 @@ Configuration is environment variables only (see `.env.example` and `app/config.
 
 The bot token and webhook secret are kept out of logs.
 
+## Security
+
+- A password reset (`POST /auth/password-reset/confirm`) signs out every session: all login tokens stop working and all `ha-agent` tokens are revoked. Pending invites created by that member are deleted.
+- A reset deliberately does **not** change your alert channels: rotating the ntfy topic or unlinking Telegram automatically could silently stop alerts reaching your real phone. Instead the response carries `{"check_alert_channels": true}` and you get an email saying the password was changed. If someone else had access to your account, regenerate your ntfy topic and check your Telegram link in Alert channels (`POST /me/alert-preferences/ntfy-topic`, then update the ntfy app; `GET /me/alert-preferences`, and `DELETE /me/telegram` plus a fresh link if the chat is not yours).
+
 ## Urgent sounds and quiet phones
 
 Sounds marked `severity: "urgent"` in `GET /sounds` (scream, glass breaking, smoke alarm, siren, loud bang / explosion, loud thud / fall, gasping) are pushed to ntfy with its highest priority (`Priority: urgent`, tag `rotating_light`); all other sounds, test alerts and sensor status messages use `high`. Whether that vibrates or breaks through silent / do-not-disturb depends on the notification settings of your ntfy app on the phone. Telegram has no priority levels, so its messages are the same for every sound. If your phone is often on silent, use ntfy for urgent sounds.
@@ -65,7 +70,7 @@ uv run pytest -q && uv run ruff check .
 - `GET /health` checks Postgres and Redis.
 - `GET /metrics` serves Prometheus counters: `ha_events_received_total{sound}`, `ha_events_merged_total`, `ha_alerts_created_total{sound}`, `ha_deliveries_total{channel,status}`, `ha_devices_offline_total`. Do not expose `/metrics` publicly; restrict it at your reverse proxy.
 - **Limitation:** each process has its own metrics registry. With Celery, delivery and offline-check counters (`ha_deliveries_total`, `ha_devices_offline_total`) are incremented in the worker/beat processes, so the API's `/metrics` does not show them. The event and alert counters are incremented in the API and are visible. Aggregating across processes is out of scope for now.
-- Each request logs one JSON line (`method`, `path`, `status`, `duration_ms`, `request_id`). `path` is the matched route template (for example `/telegram/webhook/{secret}`), never the raw URL, so tokens in paths and query strings (`/ws?token=...`) stay out of logs. No headers or bodies are logged. The Docker image runs uvicorn with `--no-access-log` for the same reason. The `request_id` is also returned as the `X-Request-ID` response header.
+- Each request logs one JSON line (`method`, `path`, `status`, `duration_ms`, `request_id`). `path` is the matched route template (for example `/telegram/webhook/{secret}`), never the raw URL, so tokens in paths and query strings (`/ws?token=...`) stay out of logs. No headers or bodies are logged. The Docker image runs uvicorn with `--no-access-log` for the same reason, the app sets uvicorn's own `uvicorn.error` logger to `WARNING` (at `INFO` it logs every WebSocket path including `?token=`), and every log line in every process has `token=<value>` masked to `token=***` as a backstop. The console email backend prints straight to stderr, outside logging, so its links stay usable in development. The `request_id` is also returned as the `X-Request-ID` response header.
 
 ## Manual end-to-end walkthrough
 

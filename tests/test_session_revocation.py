@@ -29,7 +29,9 @@ async def _reset(client, outbox, email="owner@example.com"):
     r = await client.post("/auth/password-reset/request", json={"email": email})
     assert r.status_code == 202
     body = {"token": _token(outbox), "new_password": NEW_PW}
-    assert (await client.post("/auth/password-reset/confirm", json=body)).status_code == 204
+    r = await client.post("/auth/password-reset/confirm", json=body)
+    assert r.status_code == 200, r.text
+    return r
 
 
 async def test_jwt_issued_before_reset_is_401_after_over_http(client, signed_up, outbox):
@@ -185,3 +187,54 @@ async def test_reset_deletes_pending_invites_by_that_member(client, signed_up, o
     await session.rollback()
     rows = (await session.scalars(select(Invite))).all()
     assert [i.token_hash for i in rows] == ["u" * 64]
+
+
+# Ruling 1b-R4: a reset never rotates the ntfy topic or unlinks Telegram (a safety app must
+# never silently stop alerting the real phone); it tells the member to check them instead.
+ALERT_CHANNELS_NOTE = (
+    "If someone else had access to your account, regenerate your ntfy topic "
+    "and check your Telegram link in Alert channels."
+)
+
+
+async def test_reset_confirm_says_check_alert_channels(client, signed_up, outbox):
+    await signed_up()
+    r = await _reset(client, outbox)
+    assert r.json() == {"check_alert_channels": True}
+
+
+async def test_reset_success_email_points_at_alert_channels(client, signed_up, outbox):
+    await signed_up()
+    await _reset(client, outbox)
+    done = outbox[-1]
+    assert done.to == "owner@example.com"
+    assert "password was changed" in done.body.lower()
+    assert ALERT_CHANNELS_NOTE in done.body
+    assert "token=" not in done.body  # no usable link in a notice
+
+
+async def test_reset_keeps_alert_channels(client, signed_up, outbox):
+    _, oh = await signed_up()
+    assert (await client.post("/me/alert-preferences/ntfy-topic", headers=oh)).status_code == 200
+    before = (await client.get("/me/alert-preferences", headers=oh)).json()
+    assert before["ntfy_topic"]
+    await _reset(client, outbox)
+    r = await client.post("/auth/login", json={"email": "owner@example.com", "password": NEW_PW})
+    h = _bearer(r.json()["access_token"])
+    assert (await client.get("/me/alert-preferences", headers=h)).json() == before
+
+
+async def test_reset_succeeds_when_the_notice_email_fails(client, signed_up, outbox):
+    await signed_up()
+    r = await client.post("/auth/password-reset/request", json={"email": "owner@example.com"})
+    assert r.status_code == 202
+    body = {"token": _token(outbox), "new_password": NEW_PW}
+
+    async def boom(*_a, **_k):
+        raise OSError("smtp down")
+
+    outbox.send = boom
+    r = await client.post("/auth/password-reset/confirm", json=body)
+    assert r.status_code == 200 and r.json() == {"check_alert_channels": True}
+    r = await client.post("/auth/login", json={"email": "owner@example.com", "password": NEW_PW})
+    assert r.status_code == 200

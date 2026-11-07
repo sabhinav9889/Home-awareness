@@ -26,7 +26,7 @@ async def test_reset_changes_password_and_token_single_use(client, signed_up, ou
     assert len(outbox) == n + 1
     token = _token(outbox)
     body = {"token": token, "new_password": "brand-new-pass-9"}
-    assert (await client.post("/auth/password-reset/confirm", json=body)).status_code == 204
+    assert (await client.post("/auth/password-reset/confirm", json=body)).status_code == 200
     old = await client.post("/auth/login", json={"email": "o@example.com", "password": PW})
     assert old.status_code == 401
     new = await client.post(

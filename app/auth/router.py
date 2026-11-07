@@ -41,6 +41,12 @@ from app.security import (
 
 CONFIRM_TTL = timedelta(hours=24)
 RESET_TTL = timedelta(hours=1)
+# Ruling 1b-R4: a reset never rotates the ntfy topic or unlinks Telegram (a safety app must
+# never silently stop alerting the real phone), so the member is told to check them.
+ALERT_CHANNELS_NOTE = (
+    "If someone else had access to your account, regenerate your ntfy topic "
+    "and check your Telegram link in Alert channels."
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 _signup_limit = rate_limit("signup", 10, 60, by_ip)
@@ -248,15 +254,20 @@ async def password_reset_request(
 
 @router.post(
     "/password-reset/confirm",
-    status_code=204,
+    status_code=200,
     dependencies=[Depends(_reset_limit)],
-    description=f"Set a new password using the emailed reset token. {DISCLAIMER}",
+    description=(
+        "Set a new password using the emailed reset token. Signs out every session but keeps "
+        "your alert channels: `check_alert_channels` is always true, as a reminder to "
+        f"regenerate the ntfy topic and check the Telegram link. {DISCLAIMER}"
+    ),
 )
 async def password_reset_confirm(
     body: ResetConfirmIn,
     session: Annotated[AsyncSession, Depends(get_session)],
     redis: Annotated[Redis, Depends(get_redis)],
-):
+    sender: Annotated[EmailSender, Depends(get_email_sender)],
+) -> dict[str, bool]:
     now = datetime.now(UTC)
     member_id = await session.scalar(
         update(EmailToken)
@@ -272,6 +283,7 @@ async def password_reset_confirm(
     if member_id is None:
         raise HTTPException(status_code=400, detail="invalid or expired token")
     member = await session.get(Member, member_id)
+    email = member.email
     member.password_hash = await hash_password(body.new_password)
     # Sign out every session in the same transaction: JWTs die with the version bump,
     # agent tokens are revoked.
@@ -304,4 +316,13 @@ async def password_reset_confirm(
         await publish_disconnect(redis, [member_id])
     except Exception as e:  # noqa: BLE001
         log.warning("reset disconnect for member %s failed: %s", member_id, type(e).__name__)
-    return Response(status_code=204)
+    try:  # best effort: the reset already happened; a lost notice must not undo or fail it
+        await sender.send(
+            email,
+            "Your Home Awareness password was changed",
+            "Your Home Awareness password was changed and every session was signed out.\n\n"
+            f"{ALERT_CHANNELS_NOTE}\n\n{DISCLAIMER}",
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("reset notice for member %s failed: %s", member_id, type(e).__name__)
+    return {"check_alert_channels": True}
