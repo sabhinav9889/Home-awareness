@@ -288,3 +288,48 @@ def test_events_table_scrolls_inside_its_box_at_phone_width(new_page, live):
     assert box.evaluate("e => getComputedStyle(e).overflowX") == "auto"
     assert box.evaluate("e => e.scrollWidth > e.clientWidth")  # the table scrolls in its box
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+def test_backoff_grows_when_the_server_drops_every_socket_at_once(page, live):
+    # Each socket "opens" (the route accepts it) and is closed at once. The backoff must not
+    # reset on such a short-lived open: retries come 1, 2, 4 s apart, not every second.
+    opened, sockets = [], []
+
+    def accept(ws):  # closed from the test thread below (closing inside the handler stalls)
+        opened.append(time.monotonic())
+        sockets.append(ws)
+
+    page.route_web_socket(re.compile(r"/ws\?token="), accept)
+    events_calls = []
+    page.on("request", lambda r: "/events?" in r.url and events_calls.append(r.url))
+    m = _member(live)
+    page.goto("/app/#/login")
+    page.evaluate("t => sessionStorage.setItem('ha.token', t)", m.token)
+    page.goto("/app/#/overview")
+    expect(page.get_by_role("heading", name="Overview")).to_be_visible()
+    deadline = time.monotonic() + 9
+    while len(opened) < 4 and time.monotonic() < deadline:
+        while sockets:
+            sockets.pop().close(code=1011, reason="boom")
+        page.wait_for_timeout(50)
+    assert len(opened) >= 4, opened
+    for ws in sockets:
+        ws.close(code=1011, reason="boom")
+    gaps = [b - a for a, b in zip(opened, opened[1:], strict=False)][:3]
+    assert gaps[0] >= 0.9 and gaps[1] >= 1.9 and gaps[2] >= 3.9, gaps
+    expect(_pill(page)).to_have_text("Reconnecting…")
+    # one initial load plus at most one catch-up per open, never a storm
+    assert len(events_calls) <= len(opened) + 1, events_calls
+
+
+def test_sensor_cards_refresh_from_the_server_every_30_s(page, live):
+    page.clock.install()
+    m = _member(live)
+    hall = _device(live, m, "Hall")  # pending: its first heartbeat publishes nothing live
+    _open(page, m)
+    card = _sensor(page, "Hall")
+    expect(card).to_contain_text("Waiting for its first heartbeat")
+    _heartbeat(live, hall)
+    with page.expect_response(re.compile(r"/devices$")):
+        page.clock.fast_forward(31_000)
+    expect(card).to_contain_text("Listening")

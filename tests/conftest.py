@@ -1,4 +1,9 @@
+import fcntl
+import hashlib
 import os
+import sys
+import tempfile
+import time
 import types
 
 import fakeredis.aioredis
@@ -23,6 +28,26 @@ TEST_DATABASE_URL = os.environ.get(
 )
 
 _tables_created = False
+_db_lock = None
+
+
+def pytest_configure(config):
+    """One test run per database at a time. Every run drops and recreates the tables and the
+    web tests TRUNCATE them, so two concurrent runs (e.g. two terminals or agents) wipe each
+    other's data mid-test. A second run waits here until the first one exits."""
+    global _db_lock
+    if _db_lock is not None:
+        return
+    key = hashlib.sha256(TEST_DATABASE_URL.encode()).hexdigest()[:12]
+    path = os.path.join(tempfile.gettempdir(), f"home-awareness-tests-{key}.lock")
+    _db_lock = open(path, "w")  # noqa: SIM115  held (and the lock with it) until the process exits
+    try:
+        fcntl.flock(_db_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("waiting for another test run on the same database to finish…", file=sys.stderr)
+        started = time.monotonic()
+        fcntl.flock(_db_lock, fcntl.LOCK_EX)
+        print(f"…waited {time.monotonic() - started:.0f} s", file=sys.stderr)
 
 
 def require_test_database(url: str) -> None:

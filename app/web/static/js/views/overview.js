@@ -1,6 +1,7 @@
 // Overview: household status, sensors, live events (over /ws) and the alert-channel summary.
+// The socket opens before the first fetch, so nothing published in between is missed.
 // Events are keyed by id, so the initial fetch, live messages and the catch-up fetch after
-// every (re)connect never produce duplicate rows.
+// every reconnect never produce duplicate rows.
 import { request } from "../api.js";
 import { connect } from "../live.js";
 import { el } from "../ui.js";
@@ -8,8 +9,11 @@ import { el } from "../ui.js";
 const FETCH_LIMIT = 200; // enough history for today's counts
 const CATCH_UP_LIMIT = 50; // after a reconnect: what may have been missed
 const TABLE_ROWS = 50;
-const KEEP_EVENTS = 500; // memory bound for a tab left open for days
+const KEEP_EVENTS = 500; // memory bounds for a tab left open for days
+const KEEP_ALERTS = 500;
 const TICK_MS = 10_000; // "heartbeat 12 s ago" refresh
+const DEVICES_REFRESH_MS = 30_000; // fresh last_seen_at; first heartbeats publish nothing
+const FIRST_CONNECT_WAIT_MS = 3000; // load the data once the socket listens (or gave up)
 const ALERTS_REFRESH_MS = 800; // after a live event: did it alert me?
 
 const KINDS = { laptop: "Laptop", phone: "Phone", pi: "Raspberry Pi", other: "Sensor" };
@@ -79,6 +83,10 @@ export async function overviewView(_params, { household }) {
         test: a.sound_key === "test",
       });
     }
+    if (alerts.size > KEEP_ALERTS) {
+      const oldest = [...alerts].sort(([, a], [, b]) => (a.at > b.at) - (a.at < b.at));
+      for (const [id] of oldest.slice(0, alerts.size - KEEP_ALERTS)) alerts.delete(id);
+    }
   }
 
   function setDevices(rows) {
@@ -88,19 +96,49 @@ export async function overviewView(_params, { household }) {
   const sorted = () => [...events.values()].sort((a, b) =>
     (b.received_at > a.received_at) - (b.received_at < a.received_at) || b.id - a.id);
 
-  const [ev, al, dv, prefs] = await Promise.all([
-    request("GET", `/events?limit=${FETCH_LIMIT}`),
-    request("GET", `/alerts?limit=${FETCH_LIMIT}`),
-    request("GET", "/devices"),
-    request("GET", "/me/alert-preferences"),
-  ]);
-  addEvents(ev);
-  truncated = truncated || ev.length === FETCH_LIMIT;
-  addAlerts(al);
-  setDevices(dv);
+  // --- socket first: messages wait in `early` until the data has loaded ---
+  const pill = el("span", { class: "live-pill", role: "status" });
+  let status = "connecting";
+  let loaded = false;
+  const early = [];
+  let firstStatus;
+  const firstStatusSeen = new Promise((resolve) => { firstStatus = resolve; });
+  setStatus(status);
+  const closeSocket = connect({
+    onMessage: (msg) => (loaded ? onMessage(msg) : early.push(msg)),
+    onStatus: (s) => {
+      firstStatus();
+      if (closed) return;
+      const wasLive = status === "live";
+      status = s;
+      setStatus(s);
+      // Back after a gap (or first opened only after the data loaded): fetch what was missed.
+      if (s === "live" && !wasLive && loaded) catchUp();
+    },
+  });
+
+  let prefs;
+  try {
+    await Promise.race([firstStatusSeen,
+      new Promise((resolve) => setTimeout(resolve, FIRST_CONNECT_WAIT_MS))]);
+    const [ev, al, dv, pr] = await Promise.all([
+      request("GET", `/events?limit=${FETCH_LIMIT}`),
+      request("GET", `/alerts?limit=${FETCH_LIMIT}`),
+      request("GET", "/devices"),
+      request("GET", "/me/alert-preferences"),
+    ]);
+    addEvents(ev);
+    truncated = truncated || ev.length === FETCH_LIMIT;
+    addAlerts(al);
+    setDevices(dv);
+    prefs = pr;
+  } catch (err) {
+    closed = true;
+    closeSocket();
+    throw err;
+  }
 
   // --- DOM ---
-  const pill = el("span", { class: "live-pill", role: "status" });
   const statusBox = el("section", { class: "status-card", "aria-label": "Status" });
   const sensorGrid = el("div", { class: "sensor-grid" });
   const tbody = el("tbody");
@@ -155,7 +193,7 @@ export async function overviewView(_params, { household }) {
   }
 
   function sensorCard(d) {
-    const kind = KINDS[d.kind] || "Sensor";
+    const kind = Object.hasOwn(KINDS, d.kind) ? KINDS[d.kind] : "Sensor";
     let state, sub;
     if (d.status === "online") {
       state = "Listening";
@@ -237,22 +275,58 @@ export async function overviewView(_params, { household }) {
     }, ALERTS_REFRESH_MS);
   }
 
+  // aria-busy on the feed while a catch-up is in flight (tests and screen readers wait on it).
+  let busy = 0;
+  function markBusy(delta) {
+    busy += delta;
+    feed.setAttribute("aria-busy", String(busy > 0));
+  }
+
+  // One catch-up at a time; a reconnect during one queues exactly one more.
+  let catching = false;
+  let again = false;
   async function catchUp() {
-    feed.setAttribute("aria-busy", "true");
+    if (catching) {
+      again = true;
+      return;
+    }
+    catching = true;
+    markBusy(1);
     try {
-      const [e, a, d] = await Promise.all([
-        request("GET", `/events?limit=${CATCH_UP_LIMIT}`),
-        request("GET", `/alerts?limit=${CATCH_UP_LIMIT}`),
-        request("GET", "/devices"),
-      ]);
+      do {
+        again = false;
+        try {
+          const [e, a, d] = await Promise.all([
+            request("GET", `/events?limit=${CATCH_UP_LIMIT}`),
+            request("GET", `/alerts?limit=${CATCH_UP_LIMIT}`),
+            request("GET", "/devices"),
+          ]);
+          if (closed) return;
+          addEvents(e);
+          addAlerts(a);
+          setDevices(d);
+          renderAll();
+        } catch { /* a 401 already logged out; otherwise the live feed carries on */ }
+      } while (again && !closed);
+    } finally {
+      catching = false;
+      markBusy(-1);
+    }
+  }
+
+  let refreshingDevices = false;
+  async function refreshDevices() {
+    if (refreshingDevices) return;
+    refreshingDevices = true;
+    try {
+      const d = await request("GET", "/devices");
       if (closed) return;
-      addEvents(e);
-      addAlerts(a);
       setDevices(d);
-      renderAll();
-    } catch { /* a 401 already logged out; otherwise the live feed carries on */ }
+      renderStatus();
+      renderSensors();
+    } catch { /* next tick retries */ }
     finally {
-      feed.setAttribute("aria-busy", "false");
+      refreshingDevices = false;
     }
   }
 
@@ -276,7 +350,7 @@ export async function overviewView(_params, { household }) {
       case "device_offline":
       case "device_online": {
         const d = devices.get(msg.device_id);
-        if (!d) { catchUp(); break; }
+        if (!d) { refreshDevices(); break; }
         d.status = msg.kind === "device_online" ? "online" : "offline";
         if (msg.kind === "device_online") d.last_seen_at = new Date().toISOString();
         renderStatus();
@@ -287,18 +361,11 @@ export async function overviewView(_params, { household }) {
     }
   }
 
-  setStatus("connecting");
   renderAll();
-  const closeSocket = connect({
-    onMessage,
-    onStatus: (s) => {
-      if (closed) return;
-      setStatus(s);
-      // Every (re)connect: fetch what may have been missed while no socket was listening.
-      if (s === "live") catchUp();
-    },
-  });
+  loaded = true;
+  for (const msg of early.splice(0)) onMessage(msg);
   const ticker = setInterval(renderSensors, TICK_MS);
+  const devicesTimer = setInterval(refreshDevices, DEVICES_REFRESH_MS);
 
   const node = el("section", { class: "stack overview" },
     el("header", { class: "page-head" }, el("h1", {}, "Overview"), pill),
@@ -313,6 +380,7 @@ export async function overviewView(_params, { household }) {
       closed = true;
       closeSocket();
       clearInterval(ticker);
+      clearInterval(devicesTimer);
       clearTimeout(alertsTimer);
     },
   };
