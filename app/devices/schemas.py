@@ -74,3 +74,6 @@ class DeviceConfigOut(BaseModel):
     heartbeat_interval_s: int
     # Per enabled sound: the lowest min_confidence any member who enabled it wants.
     thresholds: dict[str, float]
+    # True while the household is Away or inside its night hours: cameras then treat a
+    # person in view as an alert (`person_away`).
+    guarding: bool = False

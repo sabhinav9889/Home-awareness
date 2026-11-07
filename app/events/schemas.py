@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.catalog import SOUNDS
+from app.catalog import INCIDENT_KEYS, SOUNDS
 
 MAX_SKEW = timedelta(minutes=10)
 
@@ -19,7 +19,7 @@ class EventIn(BaseModel):
     @field_validator("type")
     @classmethod
     def _known_sound(cls, v: str) -> str:
-        if v not in SOUNDS:
+        if v not in SOUNDS or v in INCIDENT_KEYS:  # incidents are server-raised only
             raise ValueError("unknown sound type")
         return v
 

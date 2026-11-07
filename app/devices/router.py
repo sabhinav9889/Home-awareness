@@ -7,6 +7,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.catalog import INCIDENT_KEYS
 from app.db import get_session
 from app.devices.deps import current_device
 from app.devices.models import (
@@ -29,6 +30,8 @@ from app.devices.schemas import (
     WhoamiOut,
 )
 from app.disclaimer import DISCLAIMER
+from app.households.guarding import is_guarding
+from app.households.models import Household
 from app.live.hub import publish_to_household
 from app.ratelimit import by_device_key, by_ip, rate_limit
 from app.redis import get_redis
@@ -219,12 +222,14 @@ async def whoami(device: Annotated[Device, Depends(current_device)]) -> WhoamiOu
 
 
 async def _config(session: AsyncSession, device: Device) -> DeviceConfigOut:
-    sounds = await household_enabled_sounds(session, device.household_id)
+    sounds = await household_enabled_sounds(session, device.household_id) - INCIDENT_KEYS
+    household = await session.get(Household, device.household_id)
     thresholds = await household_thresholds(session, device.household_id, sounds)
     return DeviceConfigOut(
         enabled_sounds=sorted(sounds),
         heartbeat_interval_s=HEARTBEAT_INTERVAL_S,
         thresholds=dict(sorted(thresholds.items())),
+        guarding=is_guarding(household, datetime.now(UTC)),
     )
 
 

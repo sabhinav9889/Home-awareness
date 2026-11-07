@@ -7,8 +7,8 @@ import app.devices.router as devices_router
 from app.devices.models import Device
 from tests.test_devices import _pair
 
-DEFAULT_ON = ["glass_breaking", "scream", "smoke_alarm"]
-DEFAULT_THRESHOLDS = {"glass_breaking": 0.30, "scream": 0.30, "smoke_alarm": 0.30}
+DEFAULT_ON = ["fall", "glass_breaking", "lying_still", "person_away", "scream", "smoke_alarm"]
+DEFAULT_THRESHOLDS = dict.fromkeys(DEFAULT_ON, 0.30)
 
 
 pytestmark = pytest.mark.usefixtures("frozen_ratelimit_clock")
@@ -29,6 +29,7 @@ async def test_heartbeat_marks_online_and_returns_union_config(client, signed_up
         "enabled_sounds": DEFAULT_ON,
         "heartbeat_interval_s": 60,
         "thresholds": DEFAULT_THRESHOLDS,
+        "guarding": False,
     }
     device = await session.get(Device, device_id)
     await session.refresh(device)
@@ -77,6 +78,7 @@ async def test_get_config_does_not_touch_last_seen_or_limit(client, signed_up, s
             "enabled_sounds": DEFAULT_ON,
             "heartbeat_interval_s": 60,
             "thresholds": DEFAULT_THRESHOLDS,
+            "guarding": False,
         }
     device = await session.get(Device, device_id)
     await session.refresh(device)
