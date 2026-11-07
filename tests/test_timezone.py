@@ -84,3 +84,9 @@ async def test_alert_text_uses_household_local_time(signed_up, session, factory,
 
     text = json.loads(tg.calls[0].request.content)["text"]
     assert text == "⚠️ Scream detected by Hall at 02:14 IST — Home Awareness"
+
+
+@pytest.mark.parametrize("bad", [None, "", "Mars/Olympus_Mons", "../etc/passwd", "+05:30"])
+def test_tz_label_falls_back_to_utc_and_never_fails_an_alert(bad):
+    at = datetime(2026, 11, 7, 20, 44, tzinfo=UTC)
+    assert tz_label(at, bad) == ("20:44", "UTC")

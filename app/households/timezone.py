@@ -13,9 +13,17 @@ def validate_timezone(v: str) -> str:
     return v
 
 
-def tz_label(at: datetime, tz_name: str) -> tuple[str, str]:
-    """('HH:MM', abbreviation) of the instant `at` in the named zone."""
-    local = at.astimezone(ZoneInfo(tz_name))
+def tz_label(at: datetime, tz_name: str | None) -> tuple[str, str]:
+    """('HH:MM', abbreviation) of the instant `at` in the named zone. A missing or unknown
+    zone (e.g. removed from tzdata after it was saved) falls back to UTC: a label must never
+    fail an alert."""
+    try:
+        if not tz_name or tz_name.startswith(("+", "-")):
+            raise ValueError
+        zone = ZoneInfo(tz_name)
+    except (ValueError, ZoneInfoNotFoundError, OSError):
+        zone = ZoneInfo("UTC")
+    local = at.astimezone(zone)
     abbr = local.strftime("%Z")
     if abbr[:1] in ("+", "-"):  # numeric-looking: render GMT+5:30 style
         minutes = int(local.utcoffset().total_seconds() // 60)
