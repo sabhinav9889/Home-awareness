@@ -4,10 +4,11 @@ import * as auth from "./auth.js";
 export const SESSION_ENDED = "Your session ended — please log in again.";
 
 export class ApiError extends Error {
-  constructor(status, detail) {
+  constructor(status, detail, body = null) {
     super(detail);
     this.status = status;
     this.detail = detail;
+    this.body = body; // the parsed error body (e.g. a 409's {"by": ...})
   }
 }
 
@@ -39,5 +40,5 @@ export async function request(method, path, body) {
   // A 401 on a call that carried a session means the session is gone (expired, reset,
   // removed). Without one (e.g. a wrong password at login) it is just the server's answer.
   if (res.status === 401 && token) auth.logout(SESSION_ENDED);
-  throw new ApiError(res.status, detailText(data, res.status));
+  throw new ApiError(res.status, detailText(data, res.status), data);
 }

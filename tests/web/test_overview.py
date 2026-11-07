@@ -32,16 +32,16 @@ AMBER = "rgb(180, 83, 9)"  # #B45309
 # --- API-side helpers (the "other side": members and fake sensors) ---
 
 
-def _member(live, household="Maple House", timezone="UTC"):
+def _member(live, household="Maple House", timezone="UTC", invite_token=None):
+    """A confirmed, logged-in member: a new household, or joining one with `invite_token`."""
     email = f"u{uuid.uuid4().hex[:10]}@example.com"
+    body = {"email": email, "password": PW}
+    if invite_token:
+        body["invite_token"] = invite_token
+    else:
+        body.update(household_name=household, timezone=timezone)
     with httpx.Client(base_url=live.base_url) as c:
-        r = c.post(
-            "/auth/signup",
-            json={
-                "email": email, "password": PW, "household_name": household,
-                "timezone": timezone,
-            },
-        )  # fmt: skip
+        r = c.post("/auth/signup", json=body)
         assert r.status_code == 201, r.text
         token = live.outbox[-1].body.split("token=")[1].split()[0]
         assert c.post("/auth/confirm", json={"token": token}).status_code == 204
@@ -50,7 +50,7 @@ def _member(live, household="Maple House", timezone="UTC"):
     jwt = r.json()["access_token"]
     claims = json.loads(base64.urlsafe_b64decode(jwt.split(".")[1] + "=="))
     return types.SimpleNamespace(
-        token=jwt, headers={"Authorization": f"Bearer {jwt}"}, id=int(claims["sub"])
+        token=jwt, headers={"Authorization": f"Bearer {jwt}"}, id=int(claims["sub"]), email=email
     )
 
 

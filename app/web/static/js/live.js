@@ -1,3 +1,5 @@
+// connect(): one socket with reconnect/backoff. startLive/stopLive/subscribe (below): the
+// app-wide connection every view shares.
 // The live socket (/ws): parsed messages to onMessage, "live"/"reconnecting" to onStatus.
 // Reconnects with backoff 1, 2, 4 … 30 s. The backoff only resets once a socket has stayed
 // open for `stableMs`, so a server that accepts and then drops at once isn't hammered.
@@ -64,4 +66,52 @@ export function connect({
       sock.close(1000);
     }
   };
+}
+
+// --- the app's one shared connection ---
+// app.js starts it once a session exists and stops it on any public view (logout). Views
+// and the alert screen subscribe; a subscriber gets the current status at once if the
+// socket is already open, so a view mounted later still sees "live" and later changes.
+// <html data-live="live|reconnecting|connecting|off"> mirrors the status (tests wait on it).
+const subscribers = new Set();
+let closeShared = null;
+let sharedStatus = "off";
+
+function setShared(status) {
+  sharedStatus = status;
+  document.documentElement.dataset.live = status;
+  if (status !== "live" && status !== "reconnecting") return; // subscribers see connect()'s two
+  for (const s of [...subscribers]) s.onStatus?.(status);
+}
+
+export function startLive() {
+  if (closeShared) return;
+  setShared("connecting");
+  closeShared = connect({
+    onMessage: (msg) => {
+      for (const s of [...subscribers]) {
+        try {
+          s.onMessage?.(msg);
+        } catch (err) {
+          console.error("live subscriber failed", err); // one view's bug can't starve others
+        }
+      }
+    },
+    onStatus: setShared,
+  });
+}
+
+export function stopLive() {
+  if (!closeShared) return;
+  const close = closeShared;
+  closeShared = null;
+  close();
+  setShared("off");
+}
+
+// subscribe({onMessage, onStatus}) -> unsubscribe()
+export function subscribe(sub) {
+  subscribers.add(sub);
+  if (sharedStatus === "live" || sharedStatus === "reconnecting") sub.onStatus?.(sharedStatus);
+  return () => subscribers.delete(sub);
 }

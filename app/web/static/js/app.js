@@ -1,9 +1,11 @@
 // Entry point: registers routes and renders each view into the right layout.
 import { request } from "./api.js";
 import * as auth from "./auth.js";
+import { startLive, stopLive } from "./live.js";
 import { route, start } from "./router.js";
 import { el, footer, message } from "./ui.js";
 import { confirmView, loginView, resetView, signupView } from "./views/auth.js";
+import * as alertScreen from "./views/alert.js";
 import { overviewView } from "./views/overview.js";
 import { soundsView } from "./views/sounds.js";
 
@@ -66,11 +68,19 @@ async function renderRoute(entry, params, path) {
   const seq = ++renderSeq;
   try {
     if (entry.isPublic) {
+      // No session on public views (logout lands here): close the shared socket.
+      stopLive();
+      alertScreen.reset();
       const view = await entry.render(params);
       if (seq === renderSeq) root.replaceChildren(publicLayout(view));
       return;
     }
+    // One socket for the whole session, opened before the view's own fetches so the
+    // alert screen works on every view.
+    startLive();
+    alertScreen.start();
     const household = await request("GET", "/households/me");
+    alertScreen.start({ timezone: household.timezone });
     const result = await entry.render(params, { household });
     const { node, cleanup } = result instanceof Node ? { node: result } : result;
     if (seq === renderSeq) root.replaceChildren(appLayout(node, path, household));

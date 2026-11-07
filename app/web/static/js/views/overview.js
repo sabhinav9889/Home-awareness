@@ -1,9 +1,10 @@
 // Overview: household status, sensors, live events (over /ws) and the alert-channel summary.
-// The socket opens before the first fetch, so nothing published in between is missed.
+// It subscribes to the app's shared socket (live.js) before the first fetch, so nothing
+// published in between is missed; leaving the view unsubscribes (the socket stays open).
 // Events are keyed by id, so the initial fetch, live messages and the catch-up fetch after
 // every reconnect never produce duplicate rows.
 import { request } from "../api.js";
-import { connect } from "../live.js";
+import { subscribe } from "../live.js";
 import { el } from "../ui.js";
 
 const FETCH_LIMIT = 200; // enough history for today's counts
@@ -15,6 +16,7 @@ const TICK_MS = 10_000; // "heartbeat 12 s ago" refresh
 const DEVICES_REFRESH_MS = 30_000; // fresh last_seen_at; first heartbeats publish nothing
 const FIRST_CONNECT_WAIT_MS = 3000; // load the data once the socket listens (or gave up)
 const ALERTS_REFRESH_MS = 800; // after a live event: did it alert me?
+const EARLY_MAX = 500; // messages held while loading; past this, catch up instead
 
 const KINDS = { laptop: "Laptop", phone: "Phone", pi: "Raspberry Pi", other: "Sensor" };
 
@@ -101,15 +103,22 @@ export async function overviewView(_params, { household }) {
   let status = "connecting";
   let loaded = false;
   const early = [];
+  let earlyOverflow = false;
+  let liveGen = 0; // counts transitions to "live"
   let firstStatus;
   const firstStatusSeen = new Promise((resolve) => { firstStatus = resolve; });
   setStatus(status);
-  const closeSocket = connect({
-    onMessage: (msg) => (loaded ? onMessage(msg) : early.push(msg)),
+  const unsubscribe = subscribe({
+    onMessage: (msg) => {
+      if (loaded) onMessage(msg);
+      else if (early.length < EARLY_MAX) early.push(msg);
+      else earlyOverflow = true;
+    },
     onStatus: (s) => {
       firstStatus();
       if (closed) return;
       const wasLive = status === "live";
+      if (s === "live" && !wasLive) liveGen += 1;
       status = s;
       setStatus(s);
       // Back after a gap (or first opened only after the data loaded): fetch what was missed.
@@ -118,9 +127,11 @@ export async function overviewView(_params, { household }) {
   });
 
   let prefs;
+  let liveAtFetch;
   try {
     await Promise.race([firstStatusSeen,
       new Promise((resolve) => setTimeout(resolve, FIRST_CONNECT_WAIT_MS))]);
+    liveAtFetch = status === "live" ? liveGen : -1; // which live stretch the fetch covers
     const [ev, al, dv, pr] = await Promise.all([
       request("GET", `/events?limit=${FETCH_LIMIT}`),
       request("GET", `/alerts?limit=${FETCH_LIMIT}`),
@@ -134,7 +145,7 @@ export async function overviewView(_params, { household }) {
     prefs = pr;
   } catch (err) {
     closed = true;
-    closeSocket();
+    unsubscribe();
     throw err;
   }
 
@@ -364,6 +375,9 @@ export async function overviewView(_params, { household }) {
   renderAll();
   loaded = true;
   for (const msg of early.splice(0)) onMessage(msg);
+  // The socket (re)opened while loading, or the buffer overflowed: the fetch may predate
+  // messages we never saw, so fetch once more.
+  if (earlyOverflow || (status === "live" && liveGen !== liveAtFetch)) catchUp();
   const ticker = setInterval(renderSensors, TICK_MS);
   const devicesTimer = setInterval(refreshDevices, DEVICES_REFRESH_MS);
 
@@ -378,7 +392,7 @@ export async function overviewView(_params, { household }) {
     node,
     cleanup() {
       closed = true;
-      closeSocket();
+      unsubscribe();
       clearInterval(ticker);
       clearInterval(devicesTimer);
       clearTimeout(alertsTimer);
