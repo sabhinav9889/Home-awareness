@@ -127,3 +127,36 @@ def test_scores_clips_window_to_unit_range():
     window = np.linspace(-3.0, 3.0, model.WINDOW_SAMPLES, dtype=np.float32)
     clf.scores(window)
     assert clf._interp.seen.min() == -1.0 and clf._interp.seen.max() == 1.0
+
+
+def _chime_note(freq: float, seconds: float) -> np.ndarray:
+    """A decaying bell-like note: fundamental plus two harmonics."""
+    t = np.arange(int(16000 * seconds)) / 16000
+    tone = np.sin(2 * np.pi * freq * t) + 0.4 * np.sin(4 * np.pi * freq * t)
+    tone += 0.2 * np.sin(6 * np.pi * freq * t)
+    return 0.5 * np.exp(-3.0 * t) * tone / 1.6
+
+
+def _detected(clf, samples: np.ndarray) -> set[str]:
+    from ha_edge.detector import Detector
+    from ha_edge.evaluation import clip_scores, detections_from_scores
+    from ha_edge.labels import build_index
+
+    detector = Detector(build_index(clf.class_names), num_classes=len(clf.class_names))
+    return detections_from_scores(clip_scores(samples.astype(np.float32), clf), detector)
+
+
+@pytest.mark.model
+@needs_model
+def test_two_tone_ding_dong_chime_is_a_doorbell(clf):
+    # E5 then C5, like a chime doorbell (the live debug signal). YAMNet hears it as
+    # "Ding"/"Clang", not "Doorbell", so only the Ding rule catches it.
+    chime = np.concatenate([_chime_note(659.25, 0.8), _chime_note(523.25, 1.2), np.zeros(8000)])
+    assert _detected(clf, chime) == {"doorbell"}
+
+
+@pytest.mark.model
+@needs_model
+def test_pure_tone_detects_nothing(clf):
+    t = np.arange(3 * 16000) / 16000
+    assert _detected(clf, 0.5 * np.sin(2 * np.pi * 1000 * t)) == set()

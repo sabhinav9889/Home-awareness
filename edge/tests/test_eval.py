@@ -7,8 +7,11 @@ import pytest
 from ha_edge.detector import Detector
 from ha_edge.evaluation import (
     ESC50_MAP,
+    PROBE_CATEGORIES,
     compute_metrics,
+    detections_by_category,
     detections_from_scores,
+    format_category_markdown,
     format_markdown,
     read_wav_16k,
     score_clip,
@@ -102,3 +105,41 @@ def test_read_wav_resamples_to_16k(tmp_path):
 def test_format_markdown_has_row_per_sound():
     md = format_markdown({0.30: compute_metrics([("dog", {"dog_barking"})])})
     assert "dog_barking" in md and "0.30" in md
+
+
+def test_probe_categories_cover_the_confusable_esc50_classes():
+    assert PROBE_CATEGORIES == (
+        "church_bells",
+        "clock_alarm",
+        "glass_breaking",
+        "can_opening",
+        "door_wood_knock",
+    )
+
+
+def test_detections_by_category_counts_clips_per_sound():
+    preds = [
+        ("church_bells", {"doorbell"}),
+        ("church_bells", {"doorbell", "glass_breaking"}),
+        ("church_bells", set()),
+        ("can_opening", {"glass_breaking"}),
+        ("rain", {"doorbell"}),  # not probed
+    ]
+    out = detections_by_category(
+        preds, ("doorbell", "glass_breaking"), ("church_bells", "can_opening")
+    )
+    assert out == {
+        "doorbell": {"church_bells": (2, 3), "can_opening": (0, 1)},
+        "glass_breaking": {"church_bells": (1, 3), "can_opening": (1, 1)},
+    }
+
+
+def test_format_category_markdown():
+    table = format_category_markdown(
+        {0.3: {"doorbell": {"church_bells": (2, 40), "can_opening": (0, 40)}}}
+    )
+    assert table.splitlines() == [
+        "| Sound | Threshold | church_bells | can_opening |",
+        "|---|---|---|---|",
+        "| doorbell | 0.30 | 2/40 | 0/40 |",
+    ]

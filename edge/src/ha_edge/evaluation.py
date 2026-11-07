@@ -23,6 +23,17 @@ ESC50_MAP: dict[str, str] = {
     "coughing": "coughing",
 }
 
+# ESC-50 classes that sound like a doorbell or breaking glass but are not (or, for
+# glass_breaking, are the positives): their per-class detection counts show where false
+# alarms come from.
+PROBE_CATEGORIES: tuple[str, ...] = (
+    "church_bells",
+    "clock_alarm",
+    "glass_breaking",
+    "can_opening",
+    "door_wood_knock",
+)
+
 
 @dataclass(frozen=True)
 class SoundMetrics:
@@ -71,6 +82,40 @@ def compute_metrics(
                 fp += hit
         out[sound] = SoundMetrics(sound, tp, fp, fn, pos, neg)
     return out
+
+
+def detections_by_category(
+    predictions: Iterable[tuple[str, set[str]]],
+    sounds: Sequence[str],
+    categories: Sequence[str] = PROBE_CATEGORIES,
+) -> dict[str, dict[str, tuple[int, int]]]:
+    """For each sound and ESC-50 category: (clips where the sound fired, clips)."""
+    preds = list(predictions)
+    out: dict[str, dict[str, tuple[int, int]]] = {}
+    for sound in sounds:
+        row: dict[str, tuple[int, int]] = {}
+        for cat in categories:
+            clips = [detected for category, detected in preds if category == cat]
+            row[cat] = (sum(sound in d for d in clips), len(clips))
+        out[sound] = row
+    return out
+
+
+def format_category_markdown(
+    results: dict[float, dict[str, dict[str, tuple[int, int]]]],
+) -> str:
+    """Rows of sound x threshold, a column per category, cells "fired/clips"."""
+    first = next(iter(results.values()), {})
+    categories = list(next(iter(first.values()), {}))
+    lines = [
+        "| Sound | Threshold | " + " | ".join(categories) + " |",
+        "|---|---|" + "---|" * len(categories),
+    ]
+    for sound in first:
+        for thr, by_sound in sorted(results.items()):
+            cells = " | ".join(f"{n}/{total}" for n, total in by_sound[sound].values())
+            lines.append(f"| {sound} | {thr:.2f} | {cells} |")
+    return "\n".join(lines) + "\n"
 
 
 def read_wav_16k(path: Path) -> np.ndarray:

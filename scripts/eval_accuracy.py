@@ -13,7 +13,9 @@ from ha_edge.detector import Detector
 from ha_edge.evaluation import (
     clip_scores,
     compute_metrics,
+    detections_by_category,
     detections_from_scores,
+    format_category_markdown,
     format_markdown,
     read_wav_16k,
 )
@@ -21,6 +23,8 @@ from ha_edge.labels import build_index
 from ha_edge.model import YamnetClassifier, fetch_model
 
 THRESHOLDS = (0.30, 0.50)
+# Sounds whose detections are broken down per confusable ESC-50 class.
+PROBE_SOUNDS = ("doorbell", "glass_breaking")
 
 
 def main() -> int:
@@ -45,7 +49,8 @@ def main() -> int:
         if n % 100 == 0:
             print(f"{n}/{len(rows)}", file=sys.stderr)
     results = {t: compute_metrics(p) for t, p in preds.items()}
-    table = format_markdown(results)
+    by_cat = {t: detections_by_category(p, PROBE_SOUNDS) for t, p in preds.items()}
+    table = format_markdown(results) + "\n" + format_category_markdown(by_cat)
     print(table)
     if args.output:
         args.output.write_text(table, "utf-8")
