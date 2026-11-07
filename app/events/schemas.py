@@ -33,9 +33,17 @@ class EventIn(BaseModel):
         return v
 
 
+MERGED_DOC = (
+    "True when this report was folded into another sensor's report of the same sound in the "
+    "same household moments earlier. A merged report may still alert: members whose "
+    "stricter (higher) minimum confidence the earlier report missed are alerted if this "
+    "report crosses it."
+)
+
+
 class EventAccepted(BaseModel):
     event_id: int
-    merged: bool
+    merged: bool = Field(description=MERGED_DOC)
     alerts: int
 
 
@@ -46,4 +54,4 @@ class EventOut(BaseModel):
     device_name: str | None
     confidence: float
     received_at: datetime
-    merged: bool
+    merged: bool = Field(description=MERGED_DOC)

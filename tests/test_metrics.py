@@ -87,3 +87,14 @@ async def test_drop_all_guard_refuses_non_test_database():
     with pytest.raises(RuntimeError, match="_test"):
         require_test_database("postgresql+asyncpg://home:home@localhost:5432/home")
     require_test_database("postgresql+asyncpg://home:home@localhost:5432/home_test?x=1")
+
+
+async def test_merged_is_documented_as_possibly_still_alerting(client):
+    schemas = (await client.get("/openapi.json")).json()["components"]["schemas"]
+    for name in ("EventOut", "EventAccepted"):
+        doc = schemas[name]["properties"]["merged"]["description"]
+        assert "may still alert" in doc and "stricter" in doc
+    text = (await client.get("/metrics")).text
+    assert "may still alert" in next(
+        line for line in text.splitlines() if line.startswith("# HELP ha_events_merged_total")
+    )

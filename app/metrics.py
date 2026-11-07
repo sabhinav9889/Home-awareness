@@ -4,7 +4,11 @@
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
 
 EVENTS_RECEIVED = Counter("ha_events_received", "Sound events received", ["sound"])
-EVENTS_MERGED = Counter("ha_events_merged", "Events merged into another sensor's recent event")
+EVENTS_MERGED = Counter(
+    "ha_events_merged",
+    "Events merged into another sensor's recent event; a merged event may still alert "
+    "members whose stricter threshold it newly crossed",
+)
 ALERTS_CREATED = Counter("ha_alerts_created", "Alerts created from events", ["sound"])
 DELIVERIES = Counter("ha_deliveries", "Alert deliveries by outcome", ["channel", "status"])
 DEVICES_OFFLINE = Counter("ha_devices_offline", "Devices marked offline")
