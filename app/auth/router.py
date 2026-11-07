@@ -114,7 +114,7 @@ async def signup(
 
 
 async def _send_confirmation(sender: EmailSender, member_id: int, email: str, token: str) -> None:
-    link = f"{get_settings().public_base_url}/confirm?token={token}"
+    link = f"{get_settings().public_base_url}/app/#/confirm?token={token}"
     try:
         await sender.send(
             email,
@@ -243,7 +243,7 @@ async def password_reset_request(
             )
         )
         await session.commit()
-        link = f"{get_settings().public_base_url}/reset-password?token={token}"
+        link = f"{get_settings().public_base_url}/app/#/reset?token={token}"
         await sender.send(
             member.email,
             "Reset your Home Awareness password",

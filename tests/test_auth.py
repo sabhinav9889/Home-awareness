@@ -26,7 +26,7 @@ async def test_signup_creates_owner_and_household(client, session, outbox):
     assert member.id == r.json()["member_id"]
     hh = await session.get(Household, r.json()["household_id"])
     assert hh.name == "Casa"
-    assert "/confirm?token=" in outbox[0].body
+    assert "/app/#/confirm?token=" in outbox[0].body
 
 
 async def test_login_requires_confirmed_email(client, outbox):
