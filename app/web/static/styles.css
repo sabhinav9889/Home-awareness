@@ -122,3 +122,84 @@ h1 { font-size: 28px; }
   .household-box { flex-direction: row; align-items: center; justify-content: space-between; }
   .content { flex-basis: 100%; padding: 20px 16px 32px; }
 }
+
+/* Overview */
+.live-pill {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--line); font-size: 13px; color: var(--ink-2);
+}
+.live-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #9CA3AF; }
+.live-pill.is-live .dot { background: #15803D; }
+.live-pill.is-reconnecting { border-color: var(--amber); color: #92400E; }
+.live-pill.is-reconnecting .dot { background: var(--amber); }
+
+.status-card {
+  display: flex; flex-wrap: wrap; gap: 20px; align-items: center; padding: 24px;
+  border-radius: 16px; background: #0F172A; color: #F8FAFC;
+}
+.status-icon {
+  width: 56px; height: 56px; border-radius: 50%; flex: none; background: #134E4A;
+  color: #5EEAD4; display: flex; align-items: center; justify-content: center;
+  font: 700 26px var(--font-display);
+}
+.status-card.has-offline .status-icon { background: #451A03; color: #FCD34D; }
+.status-text { flex: 1 1 280px; min-width: 0; }
+.status-head { font: 600 24px var(--font-display); }
+.status-sub { margin-top: 4px; font-size: 14px; color: #CBD5E1; }
+.status-counts { display: flex; gap: 28px; font-size: 13px; color: #CBD5E1; }
+.count { font: 600 26px var(--font-display); color: #FFFFFF; }
+
+.sensors { display: flex; flex-direction: column; gap: 12px; }
+h2 { font-size: 16px; }
+.sensor-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px;
+}
+.sensor-card {
+  padding: 18px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.sensor-state { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+.sensor-state .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.sensor-online .sensor-state { color: #166534; }
+.sensor-online .dot { background: #15803D; }
+.sensor-pending .sensor-state { color: var(--muted); }
+.sensor-pending .dot { border: 2px solid var(--muted); }
+.sensor-offline { background: #FFFBEB; border-color: var(--amber); }
+.sensor-offline .sensor-state { color: #92400E; }
+.sensor-offline .dot { border: 2px solid var(--amber); }
+.sensor-offline .sensor-sub { color: #78350F; }
+.sensor-name { font-weight: 600; font-size: 16px; }
+.sensor-sub { font-size: 13px; color: var(--muted); }
+.empty-note { margin: 0; font-size: 14px; color: var(--muted); }
+
+.overview-split { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+.panel {
+  padding: 20px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.events { flex: 999 1 440px; min-width: 0; }
+.channels { flex: 1 1 260px; }
+.table-scroll { overflow-x: auto; }
+.events-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 460px; }
+.events-table th {
+  text-align: left; padding: 10px 8px; color: var(--muted); font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.events-table td { padding: 12px 8px; border-top: 1px solid #EEF0F3; overflow-wrap: normal; }
+.events-table .cell-time { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.events-table .cell-sound { font-weight: 600; }
+.chip {
+  display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px;
+  font-weight: 600; white-space: nowrap;
+}
+.chip-alerted { background: #FFEDD5; color: #9A3412; }
+.chip-merged { background: #DBEAFE; color: #1E40AF; }
+.chip-logged { background: #F1F5F9; color: #334155; }
+.ch-row { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+.ch-on { color: #166534; font-weight: 600; }
+.ch-off { color: var(--muted); }
+
+@media (max-width: 640px) {
+  .status-card { padding: 20px; }
+  .status-counts { gap: 20px; }
+}

@@ -66,8 +66,10 @@ async function renderRoute(entry, params, path) {
       return;
     }
     const household = await request("GET", "/households/me");
-    const view = await entry.render(params, { household });
-    if (seq === renderSeq) root.replaceChildren(appLayout(view, path, household));
+    const result = await entry.render(params, { household });
+    const { node, cleanup } = result instanceof Node ? { node: result } : result;
+    if (seq === renderSeq) root.replaceChildren(appLayout(node, path, household));
+    return cleanup; // the router runs it on leaving (or at once if this render is stale)
   } catch (err) {
     if (seq !== renderSeq || err.status === 401) return; // a 401 already went to login
     root.replaceChildren(publicLayout(el("section", { class: "card auth-card" },

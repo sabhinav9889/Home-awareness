@@ -106,6 +106,7 @@ def live_server():
         base_url=f"http://127.0.0.1:{port}",
         outbox=outbox,
         redis=fakeredis.FakeRedis(server=redis_server),
+        redis_server=redis_server,  # for async clients in tests (e.g. the offline check)
         jobs=runner,
     )
     server.should_exit = True
@@ -140,8 +141,8 @@ def new_page(browser, live):
     """Factory: a page in a fresh browser context (its own sessionStorage)."""
     contexts = []
 
-    def _make():
-        ctx = browser.new_context(base_url=live.base_url)
+    def _make(**context_options):
+        ctx = browser.new_context(base_url=live.base_url, **context_options)
         ctx.set_default_timeout(5000)
         # No third-party network in tests: the system font fallback is enough.
         ctx.route("https://fonts.googleapis.com/**", lambda route: route.abort())

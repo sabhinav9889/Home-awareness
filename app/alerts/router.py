@@ -40,6 +40,7 @@ class DeliveryOut(BaseModel):
 
 class AlertOut(BaseModel):
     id: int
+    event_id: int | None  # None for a test alert (or once its event is deleted)
     sound_key: str
     label: str
     device_name: str | None
@@ -85,6 +86,7 @@ async def list_alerts(
     return [
         AlertOut(
             id=a.id,
+            event_id=a.event_id,
             sound_key=a.sound_key,
             label=SOUNDS[a.sound_key].label if a.sound_key in SOUNDS else "Test alert",
             device_name=name,

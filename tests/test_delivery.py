@@ -358,6 +358,8 @@ async def test_alerts_list_only_own(client, signed_up, session):
     assert [a["id"] for a in body] == [mine.id]
     assert body[0]["deliveries"][0]["channel"] == "ntfy"
     assert body[0]["label"] == "Scream" and body[0]["device_name"] == "Hall"
+    # the dashboard marks an event "Alerted" by matching these ids
+    assert mine.event_id is not None and body[0]["event_id"] == mine.event_id
     assert [a["id"] for a in (await client.get("/alerts", headers=h_other)).json()] == [theirs.id]
 
 
