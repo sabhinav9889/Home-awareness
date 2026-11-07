@@ -45,3 +45,60 @@ export function message(text, kind = "status") {
 export function show(area, text, kind = "status") {
   area.replaceChildren(text ? message(text, kind) : "");
 }
+
+// An accessible confirm dialog (<dialog>, modal): resolves true on confirm, false otherwise.
+// `requireText`: the confirm button stays disabled until that exact text is typed into a
+// field labelled `requireLabel`. Focus starts on Cancel (or the field), never on the
+// destructive button.
+// If the alert screen takes over (it makes #root inert), the dialog closes as "cancel" so
+// it can never sit on top of an alert.
+let dialogSeq = 0;
+export function confirmDialog({
+  title, body, confirmLabel, danger = false, requireText = null, requireLabel = "Type to confirm",
+}) {
+  return new Promise((resolve) => {
+    const id = `dlg${++dialogSeq}`;
+    const ok = el("button", { type: "submit", class: `btn${danger ? " btn-danger" : ""}`,
+      value: "ok", disabled: requireText !== null }, confirmLabel);
+    const cancel = el("button", { type: "submit", class: "btn btn-quiet", value: "cancel" },
+      "Cancel");
+    let typed = null;
+    if (requireText !== null) {
+      typed = el("input", { id: `${id}-in`, autocomplete: "off", spellcheck: "false" });
+      typed.addEventListener("input", () => { ok.disabled = typed.value !== requireText; });
+    }
+    const form = el("form", { method: "dialog", class: "stack" },
+      el("h2", { id: `${id}-h` }, title),
+      body ? el("p", { id: `${id}-d`, class: "dialog-body" }, body) : null,
+      typed ? el("div", { class: "field" },
+        el("label", { for: typed.id }, requireLabel), typed) : null,
+      el("div", { class: "dialog-actions" }, cancel, ok));
+    const dialog = el("dialog", { class: "dialog", "aria-labelledby": `${id}-h`,
+      "aria-describedby": body ? `${id}-d` : null }, form);
+    const root = document.getElementById("root");
+    const watch = new MutationObserver(() => { if (root.inert) dialog.close("cancel"); });
+    dialog.addEventListener("close", () => {
+      watch.disconnect();
+      dialog.remove();
+      resolve(dialog.returnValue === "ok" && (requireText === null || typed.value === requireText));
+    });
+    document.body.append(dialog);
+    if (root) watch.observe(root, { attributes: true, attributeFilter: ["inert"] });
+    dialog.returnValue = "";
+    dialog.showModal();
+    (typed || cancel).focus();
+  });
+}
+
+// Copy text; falls back to selecting `input` (if given) so the person can press Ctrl+C.
+export async function copyText(text, input = null) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return "Copied.";
+  } catch {
+    if (!input) return "Couldn't copy automatically: select it and copy it by hand.";
+    input.focus();
+    input.select();
+    return "Couldn't copy automatically: it's selected, press Ctrl+C (or long-press) to copy.";
+  }
+}

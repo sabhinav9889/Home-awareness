@@ -101,13 +101,55 @@ export function signupView() {
       householdName: data.get("household"),
       timezone: data.get("timezone"),
     });
-    const notice = el("div", { class: "msgs" });
-    view.replaceChildren(
-      el("h1", { id: "auth-h" }, "Check your email"),
-      el("p", {}, "We sent a confirmation link to ", el("strong", {}, email),
-        ". It is valid for 24 hours."),
-      notice, resendButton(email, notice),
-      el("p", { class: "links" }, el("a", { href: "#/login" }, "Back to log in")));
+    checkEmail(view, email);
+  });
+  return view;
+}
+
+function checkEmail(view, email) {
+  const notice = el("div", { class: "msgs" });
+  view.replaceChildren(
+    el("h1", { id: "auth-h" }, "Check your email"),
+    el("p", {}, "We sent a confirmation link to ", el("strong", {}, email),
+      ". It is valid for 24 hours."),
+    notice, resendButton(email, notice),
+    el("p", { class: "links" }, el("a", { href: "#/login" }, "Back to log in")));
+}
+
+// #/join?invite=…: the invite link from an owner. The token leaves the address bar at once
+// and is kept in memory for this page only.
+let pendingInvite = null;
+
+export function joinView(params) {
+  const fromUrl = params.get("invite");
+  if (fromUrl) {
+    pendingInvite = fromUrl;
+    history.replaceState(null, "", location.pathname + location.search + "#/join");
+  }
+  const invite = pendingInvite;
+  if (!invite) {
+    return card("Join a household",
+      el("p", {}, "Open the invite link you were sent. Each link works once, for 7 days."),
+      el("p", { class: "links" }, el("a", { href: "#/login" }, "Log in"), " · ",
+        el("a", { href: "#/signup" }, "Create your own household")));
+  }
+  const area = el("div", { class: "msgs" });
+  const form = el("form", { class: "stack", novalidate: true },
+    field("Email", { name: "email", type: "email", autocomplete: "email", required: true }),
+    field("Password", {
+      name: "password", type: "password", autocomplete: "new-password", minlength: 10,
+      required: true,
+    }),
+    el("p", { class: "hint" }, "At least 10 characters."),
+    el("button", { type: "submit", class: "btn" }, "Join"));
+  const view = card("Join a household", el("p", {}, "You were invited to a household. Create " +
+    "your account to get its alerts; you choose your own sounds and channels."), area, form,
+  el("p", { class: "links" }, "Have an account? ", el("a", { href: "#/login" }, "Log in")));
+  onSubmit(form, area, async (data) => {
+    const email = data.get("email");
+    await auth.signup({ email, password: data.get("password"), inviteToken: invite });
+    pendingInvite = null;
+    checkEmail(view, email);
   });
   return view;
 }

@@ -18,7 +18,7 @@ const FIRST_CONNECT_WAIT_MS = 3000; // load the data once the socket listens (or
 const ALERTS_REFRESH_MS = 800; // after a live event: did it alert me?
 const EARLY_MAX = 500; // messages held while loading; past this, catch up instead
 
-const KINDS = { laptop: "Laptop", phone: "Phone", pi: "Raspberry Pi", other: "Sensor" };
+export const KINDS = { laptop: "Laptop", phone: "Phone", pi: "Raspberry Pi", other: "Sensor" };
 
 function validTimeZone(tz) {
   try {
@@ -50,7 +50,7 @@ function clock(timeZone) {
   };
 }
 
-function ago(iso) {
+export function ago(iso) {
   const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
   if (s < 60) return `${s} s ago`;
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;

@@ -4,23 +4,33 @@ import * as auth from "./auth.js";
 import { startLive, stopLive } from "./live.js";
 import { route, start } from "./router.js";
 import { el, footer, message } from "./ui.js";
-import { confirmView, loginView, resetView, signupView } from "./views/auth.js";
+import { confirmView, joinView, loginView, resetView, signupView } from "./views/auth.js";
 import * as alertScreen from "./views/alert.js";
+import { channelsView } from "./views/channels.js";
+import { householdView } from "./views/household.js";
 import { overviewView } from "./views/overview.js";
+import { sensorsView } from "./views/sensors.js";
 import { soundsView } from "./views/sounds.js";
 
 // Sidebar entries; later views add theirs here.
 const NAV = [
   { hash: "#/overview", label: "Overview" },
   { hash: "#/sounds", label: "Sounds & rules" },
+  { hash: "#/sensors", label: "Sensors" },
+  { hash: "#/channels", label: "Alert channels" },
+  { hash: "#/household", label: "Household" },
 ];
 
 route("#/login", loginView, { public: true });
 route("#/signup", signupView, { public: true });
 route("#/confirm", confirmView, { public: true });
 route("#/reset", resetView, { public: true });
+route("#/join", joinView, { public: true });
 route("#/overview", overviewView);
 route("#/sounds", soundsView);
+route("#/sensors", sensorsView);
+route("#/channels", channelsView);
+route("#/household", householdView);
 
 const root = document.getElementById("root");
 let renderSeq = 0;

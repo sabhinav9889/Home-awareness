@@ -40,5 +40,8 @@ export async function request(method, path, body) {
   // A 401 on a call that carried a session means the session is gone (expired, reset,
   // removed). Without one (e.g. a wrong password at login) it is just the server's answer.
   if (res.status === 401 && token) auth.logout(SESSION_ENDED);
-  throw new ApiError(res.status, detailText(data, res.status), data);
+  const err = new ApiError(res.status, detailText(data, res.status), data);
+  const retry = Number.parseInt(res.headers.get("Retry-After") || "", 10);
+  if (Number.isFinite(retry) && retry >= 0) err.retryAfter = retry; // seconds, on a 429
+  throw err;
 }

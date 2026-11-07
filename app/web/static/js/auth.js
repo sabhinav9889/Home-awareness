@@ -36,7 +36,11 @@ export function takeFlash() {
   return m;
 }
 
-export function signup({ email, password, householdName, timezone }) {
+// A new household (householdName + timezone), or joining one with an invite token.
+export function signup({ email, password, householdName, timezone, inviteToken }) {
+  if (inviteToken) {
+    return request("POST", "/auth/signup", { email, password, invite_token: inviteToken });
+  }
   return request("POST", "/auth/signup", {
     email, password, household_name: householdName, timezone,
   });
