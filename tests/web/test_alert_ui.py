@@ -205,7 +205,7 @@ def test_test_alert_takes_over_the_overview_and_the_sounds_view(new_page, live):
     expect(screen.get_by_role("heading")).to_have_text("Test alert")
     for name in (HANDLED_BY_ME, "Event details", "Dismiss"):
         expect(_button(page, name)).to_be_visible()
-    expect(_button(page, HANDLED_BY_ME)).to_be_focused()
+    expect(screen).to_be_focused()  # the dialog, not a button: a stray key can't act
     assert page.evaluate("document.getElementById('root').inert") is True
     _button(page, "Dismiss").click()
     expect(screen).to_have_count(0)
@@ -277,7 +277,7 @@ def test_other_member_sees_who_is_handling_it_and_the_beep_stops(new_page, live)
     expect(screen).to_contain_text(f"{owner.email} is handling it")
     expect(screen.get_by_role("heading")).to_have_text("Glass breaking")
     expect(_button(member_page, HANDLED_BY_ME)).to_have_count(0)
-    expect(_button(member_page, "Close")).to_be_focused()
+    expect(screen).to_be_focused()
     assert not _beeping(member_page)
     _button(member_page, "Close").click()
     expect(screen).to_have_count(0)
@@ -358,7 +358,7 @@ def test_two_alerts_queue_newest_first(new_page, live):
     _button(page, "Dismiss").click()
     expect(screen.get_by_role("heading")).to_have_text("Glass breaking")
     expect(page.locator(".alert-more")).to_have_count(0)
-    expect(_button(page, HANDLED_BY_ME)).to_be_focused()
+    expect(screen).to_be_focused()
     _button(page, "Dismiss").click()
     expect(screen).to_have_count(0)
     assert dialogs == []
@@ -488,3 +488,75 @@ def test_logout_clears_the_alert_screen(new_page, live):
     page.evaluate("sessionStorage.removeItem('ha.token'); location.hash = '#/login'")
     expect(page).to_have_url(re.compile(r"#/login"))
     expect(_screen(page)).to_have_count(0)
+
+
+# Records every alert action button as it is inserted: (heading, action, disabled at insert).
+RECORD_BUTTONS = """
+window.__buttons = [];
+new MutationObserver((records) => {
+  for (const r of records) for (const n of r.addedNodes) {
+    if (!(n instanceof Element)) continue;
+    for (const b of n.querySelectorAll("[data-action]")) {
+      const h = document.getElementById("alert-title");
+      window.__buttons.push([h ? h.textContent : "", b.dataset.action, b.disabled]);
+    }
+  }
+}).observe(document, { childList: true, subtree: true });
+"""
+
+
+def test_stray_keys_never_ack_or_dismiss(new_page, live):
+    page = _page(new_page)
+    m = _member(live)
+    _login(page, m, "#/sensors")
+    acks = []
+    page.on("request", lambda r: r.method == "POST" and r.url.endswith("/ack") and acks.append(r))
+    box = page.get_by_label("Sensor name")
+    box.click()
+    page.keyboard.type("Kit")  # someone typing when the alert arrives
+    _test_alert(live, m)
+    screen = _screen(page)
+    expect(screen).to_be_focused()
+    for key in ("Space", "Enter", "Escape"):
+        page.keyboard.press(key)
+    expect(_button(page, HANDLED_BY_ME)).to_be_enabled()  # past the 600 ms guard
+    for key in ("Space", "Enter", "Escape", "Escape"):
+        page.keyboard.press(key)
+    page.evaluate("new Promise(requestAnimationFrame)")
+    expect(screen).to_be_visible()
+    expect(screen).to_be_focused()
+    assert acks == []
+    # a deliberate Tab to "I'm on it" and Enter does ack
+    page.keyboard.press("Tab")
+    expect(_button(page, HANDLED_BY_ME)).to_be_focused()
+    with page.expect_response(re.compile(r"/alerts/\d+/ack$")) as info:
+        page.keyboard.press("Enter")
+    assert info.value.status == 200
+    expect(screen).to_have_count(0)
+    expect(box).to_be_focused()  # back where the person was
+    expect(box).to_have_value("Kit")
+
+
+def test_buttons_are_guarded_for_600ms_whenever_the_shown_alert_changes(new_page, live):
+    page = _page(new_page)
+    page.add_init_script(RECORD_BUTTONS)
+    m = _member(live)
+    hall = _device(live, m, "Hall")
+    _login(page, m)
+    _, first = _event(live, hall, "glass_breaking")
+    _deliver(live, *first)
+    expect(_button(page, HANDLED_BY_ME)).to_be_enabled()
+    _, second = _event(live, hall, "scream")
+    _deliver(live, *second)
+    expect(_screen(page).get_by_role("heading")).to_have_text("Scream")
+    expect(_button(page, HANDLED_BY_ME)).to_be_enabled()
+    log = page.evaluate("window.__buttons")
+    for heading in ("Glass breaking", "Scream"):
+        firsts = {}
+        for h, action, disabled in log:
+            if h == heading:
+                firsts.setdefault(action, disabled)
+        assert firsts == {"ack": True, "details": True, "dismiss": True}, (heading, log)
+    # Dismiss with a deliberate click still works
+    _button(page, "Dismiss").click()
+    expect(_screen(page).get_by_role("heading")).to_have_text("Glass breaking")

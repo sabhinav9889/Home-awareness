@@ -6,6 +6,11 @@
 // an alert_ack for a tracked event from someone else turns its screen into "X is handling
 // it"; my own ack (from another tab or device) just closes it. Acks for anything else are
 // ignored. Server strings only ever become text nodes.
+//
+// Stray keys (P3-R4): someone typing or half-asleep must not clear an alarm screen. When the
+// screen appears or its shown alert changes, focus goes to the dialog itself (not a button),
+// every button stays disabled for GUARD_MS, and Escape does nothing: acknowledging or
+// dismissing takes a deliberate click, or Tab to the button and Enter.
 import { request } from "../api.js";
 import { subscribe } from "../live.js";
 import { notifyIfHidden, startBeep } from "../notify.js";
@@ -15,6 +20,7 @@ import { el } from "../ui.js";
 const KEEP_QUEUED = 50; // bound for a tab left open while many alerts pile up
 const KEEP_SEEN = 500;
 const UNREACHABLE = "Couldn't reach the server — try again";
+const GUARD_MS = 600;
 
 let queue = []; // oldest first; the screen shows the last one
 const seen = new Set(); // alert ids already handled here (a duplicate message is ignored)
@@ -23,6 +29,8 @@ let timeZone;
 let screen = null;
 let returnFocus = null;
 let shown = ""; // "key:state" on screen, to move focus only when that changes
+let guardUntil = 0; // performance.now() before which the buttons stay disabled
+let guardTimer = null;
 let stopBeep = null;
 let beepKey = null;
 let subscribed = false;
@@ -194,7 +202,7 @@ function icon() {
 function button(label, action, onclick, primary = false, disabled = false) {
   return el("button", {
     type: "button", class: primary ? "alert-btn alert-btn-primary" : "alert-btn",
-    "data-action": action, disabled, onclick,
+    "data-action": action, disabled: disabled || performance.now() < guardUntil, onclick,
   }, label);
 }
 
@@ -234,15 +242,6 @@ function content(item, more) {
     actions);
 }
 
-function onKey(ev) {
-  if (ev.key !== "Escape" || !queue.length) return;
-  const item = queue.at(-1);
-  if (item.busy) return;
-  ev.preventDefault();
-  silence();
-  remove(item);
-}
-
 function setInert(on) {
   const root = document.getElementById("root");
   if (root) root.inert = on;
@@ -255,8 +254,9 @@ function render() {
       screen.remove();
       screen = null;
       shown = "";
+      guardUntil = 0;
+      clearTimeout(guardTimer);
       setInert(false);
-      document.removeEventListener("keydown", onKey);
       if (returnFocus && returnFocus.isConnected) returnFocus.focus();
       returnFocus = null;
     }
@@ -271,16 +271,23 @@ function render() {
     });
     document.body.append(screen);
     setInert(true);
-    document.addEventListener("keydown", onKey);
   }
-  const focused = screen.contains(document.activeElement)
-    ? document.activeElement.dataset.action : null;
-  screen.replaceChildren(content(item, queue.length - 1));
   const now = `${item.key}:${item.state}`;
   const changed = now !== shown;
   shown = now;
-  const target = (!changed && focused && screen.querySelector(`[data-action="${focused}"]`))
-    || screen.querySelector(".alert-btn-primary");
+  if (changed) {
+    guardUntil = performance.now() + GUARD_MS;
+    clearTimeout(guardTimer);
+    guardTimer = setTimeout(render, GUARD_MS + 10); // re-enable the buttons
+  }
+  const active = document.activeElement;
+  const focused = active !== screen && screen.contains(active) ? active.dataset.action : null;
+  screen.replaceChildren(content(item, queue.length - 1));
+  if (changed) {
+    screen.focus(); // never a button: a stray Enter or Space must not act
+    return;
+  }
+  const target = focused && screen.querySelector(`[data-action="${focused}"]`);
   if (target && !target.disabled) target.focus();
-  else screen.focus();
+  else if (!screen.contains(document.activeElement)) screen.focus();
 }

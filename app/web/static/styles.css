@@ -307,6 +307,7 @@ h2 { font-size: 16px; }
   font-size: 17px; font-weight: 700;
 }
 .alert-btn:disabled { opacity: 0.7; cursor: progress; }
+.alert-screen:focus { outline: none; } /* the dialog itself: focused to absorb stray keys */
 .alert-btn:focus-visible { outline: 3px solid #FDBA74; outline-offset: 3px; }
 
 /* --- settings views: sensors, alert channels, household --- */
