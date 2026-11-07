@@ -76,7 +76,7 @@ async def create_invite(
         Invite(token_hash=hash_token(token), created_by=tenant.member.id, expires_at=expires_at)
     )
     await session.commit()
-    url = f"{get_settings().public_base_url}/join?invite={token}"
+    url = f"{get_settings().public_base_url}/app/#/join?invite={token}"
     return InviteOut(invite_url=url, expires_at=expires_at)
 
 

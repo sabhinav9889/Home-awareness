@@ -40,11 +40,13 @@ class DeliveryOut(BaseModel):
 
 class AlertOut(BaseModel):
     id: int
+    event_id: int | None  # None for a test alert (or once its event is deleted)
     sound_key: str
     label: str
     device_name: str | None
     created_at: datetime
     status: str
+    acknowledged_by: int | None  # the member who said "I'm on it" (for its whole event)
     deliveries: list[DeliveryOut]
 
 
@@ -85,11 +87,13 @@ async def list_alerts(
     return [
         AlertOut(
             id=a.id,
+            event_id=a.event_id,
             sound_key=a.sound_key,
             label=SOUNDS[a.sound_key].label if a.sound_key in SOUNDS else "Test alert",
             device_name=name,
             created_at=a.created_at,
             status=a.status,
+            acknowledged_by=a.acknowledged_by,
             deliveries=[DeliveryOut(**_d(d)) for d in by_alert[a.id]],
         )
         for a, name in rows

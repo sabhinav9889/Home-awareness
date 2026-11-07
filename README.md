@@ -6,7 +6,7 @@ Sensors around a home listen locally for sounds a household cares about (a screa
 
 ![Architecture](docs/architecture.png)
 
-This repository is the **FastAPI server core** (Plan 1): sign-up and households, invites, pairing and device keys, heartbeats, events, the rule engine (repeat counts, cooldowns, merging), alert delivery with retries, a live WebSocket feed, offline-sensor warnings, and Telegram linking. The laptop sensor and alert agent live in [`edge/`](edge/README.md) (Plan 2); the dashboard comes in a later plan. Design: [docs/design.md](docs/design.md). Competitor research: [docs/research/2026-11-07-competitors.md](docs/research/2026-11-07-competitors.md).
+This repository is the **FastAPI server core** (Plan 1): sign-up and households, invites, pairing and device keys, heartbeats, events, the rule engine (repeat counts, cooldowns, merging), alert delivery with retries, a live WebSocket feed, offline-sensor warnings, and Telegram linking. The laptop sensor and alert agent live in [`edge/`](edge/README.md) (Plan 2). The browser dashboard is served by the same app (see [Dashboard](#dashboard)). Design: [docs/design.md](docs/design.md). Competitor research: [docs/research/2026-11-07-competitors.md](docs/research/2026-11-07-competitors.md).
 
 ## Quick start
 
@@ -29,6 +29,32 @@ If you ran an earlier version:
 2. **Telegram:** the server now also requires Telegram's `X-Telegram-Bot-Api-Secret-Token` header, so re-run the `setWebhook` call from [Telegram bot](#telegram-bot-optional) step 4 **with** `secret_token=<SECRET>`; until you do, Telegram updates (linking) are rejected. `TELEGRAM_WEBHOOK_SECRET` may now only contain `A-Z a-z 0-9 _ -` (1–256 characters) and the server refuses to start with any other character; if yours has others, pick a new one and update both `.env` and the webhook.
 3. **Laptop agents:** re-run `ha-agent login` on each laptop to replace the old 24-hour login with a long-lived agent token (old configs keep working until they expire, then `ha-agent run` asks you to log in again).
 4. **Sensors:** already-paired `ha-sensor` laptops keep working; nothing to do.
+
+## Dashboard
+
+A plain HTML/CSS/JavaScript app (no framework, no bundler, no CDN scripts) served by the API itself, on the same origin. With the stack running, open **http://localhost:8000/app/** (`/` redirects there), sign up, confirm the link from the console email (`docker compose logs api | grep token=`), and log in. The login token lives in `sessionStorage` only. It works from 360 px phones to laptops and follows the system light or dark theme.
+
+| Page | What it does |
+| --- | --- |
+| Overview | Live status of the household: sensors online, offline or waiting to pair, today's counts, a live event table and which alert channels are on. |
+| Sounds & rules | Switch each sound on or off, and set its minimum confidence, repeat count, window and cooldown. |
+| Sensors | Create an 8-character pairing code for a new sensor (with a countdown), see each sensor's state, and remove sensors. |
+| Alert channels | Popup and alarm sound in the browser, Telegram link, ntfy topic, browser notifications, a test alert, and laptop agent tokens. |
+| Household | Members and invite links, the household time zone, removing members, and leaving or deleting the household. |
+| Alert screen | A full-screen, dark, assertive alert on every page when a sound alerts you: "I'm on it", event details, dismiss. |
+
+| View | Phone (390 px) | Laptop (1280 px) |
+| --- | --- | --- |
+| Overview | ![Overview, phone](docs/screenshots/overview-mobile.png) | ![Overview, laptop](docs/screenshots/overview-desktop.png) |
+| Sounds & rules | ![Sounds, phone](docs/screenshots/sounds-mobile.png) | ![Sounds, laptop](docs/screenshots/sounds-desktop.png) |
+| Sensors | ![Sensors, phone](docs/screenshots/sensors-mobile.png) | ![Sensors, laptop](docs/screenshots/sensors-desktop.png) |
+| Alert channels | ![Channels, phone](docs/screenshots/channels-mobile.png) | ![Channels, laptop](docs/screenshots/channels-desktop.png) |
+| Household | ![Household, phone](docs/screenshots/household-mobile.png) | ![Household, laptop](docs/screenshots/household-desktop.png) |
+| Alert screen | ![Alert, phone](docs/screenshots/alert-mobile.png) | ![Alert, laptop](docs/screenshots/alert-desktop.png) |
+| Log in | ![Log in, phone](docs/screenshots/login-mobile.png) | ![Log in, laptop](docs/screenshots/login-desktop.png) |
+| Sign up | ![Sign up, phone](docs/screenshots/signup-mobile.png) | ![Sign up, laptop](docs/screenshots/signup-desktop.png) |
+
+The screenshots show a made-up demo household. Regenerate them with `uv run python scripts/dashboard_screenshots.py` (needs Postgres and Google Chrome; it uses the `home_test` database like the tests and empties it afterwards).
 
 ## Laptop sensor and alert agent
 
@@ -65,6 +91,8 @@ docker compose up -d db
 uv sync
 uv run pytest -q && uv run ruff check .
 ```
+
+The dashboard tests (`tests/web`, marked `web`) drive Google Chrome through Playwright and skip cleanly when Chrome is not installed.
 
 `TEST_DATABASE_URL` must name a database ending in `_test`; the suite drops and recreates its tables and refuses to run otherwise.
 
