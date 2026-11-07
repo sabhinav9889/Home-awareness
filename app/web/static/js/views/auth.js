@@ -40,8 +40,8 @@ function resendButton(email, area) {
 }
 
 export function loginView() {
+  const flash = auth.peekFlash();
   const area = el("div", { class: "msgs" });
-  const flash = auth.takeFlash();
   if (flash) show(area, flash);
   const form = el("form", { class: "stack", novalidate: true },
     field("Email", { name: "email", type: "email", autocomplete: "email", required: true }),

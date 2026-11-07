@@ -17,6 +17,7 @@ export async function login(email, password) {
   const { access_token } = await request("POST", "/auth/login", { email, password });
   try {
     sessionStorage.setItem(KEY, access_token);
+    flash = null;
   } catch {
     throw new Error("This browser blocks session storage, so you can't stay logged in. " +
       "Allow site data for this page (or leave private mode) and try again.");
@@ -29,11 +30,15 @@ export function logout(msg) {
   navigate("#/login");
 }
 
-// The one-shot message the login view shows after a logout.
-export function takeFlash() {
-  const m = flash;
+// The message the login view shows after a logout. It stays while the person is on the
+// login view, however often it re-renders (several 401s can each trigger one), and goes on
+// a successful login or once another public view is shown (app.js calls clearFlash()).
+export function peekFlash() {
+  return flash;
+}
+
+export function clearFlash() {
   flash = null;
-  return m;
 }
 
 // A new household (householdName + timezone), or joining one with an invite token.

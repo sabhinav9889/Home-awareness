@@ -21,8 +21,9 @@ const NAV = [
   { hash: "#/household", label: "Household" },
 ];
 
-route("#/login", loginView, { public: true });
-route("#/signup", signupView, { public: true });
+// With a session, #/login and #/signup go to the overview (join/confirm/reset stay public).
+route("#/login", loginView, { public: true, guestOnly: true });
+route("#/signup", signupView, { public: true, guestOnly: true });
 route("#/confirm", confirmView, { public: true });
 route("#/reset", resetView, { public: true });
 route("#/join", joinView, { public: true });
@@ -82,7 +83,10 @@ async function renderRoute(entry, params, path) {
       stopLive();
       alertScreen.reset();
       const view = await entry.render(params);
-      if (seq === renderSeq) root.replaceChildren(publicLayout(view));
+      if (seq === renderSeq) {
+        root.replaceChildren(publicLayout(view));
+        if (path !== "#/login") auth.clearFlash();
+      }
       return;
     }
     // One socket for the whole session, opened before the view's own fetches so the

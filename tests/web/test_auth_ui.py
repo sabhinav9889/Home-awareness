@@ -1,6 +1,7 @@
 import re
 import uuid
 
+import httpx
 import pytest
 from playwright.sync_api import expect
 
@@ -129,3 +130,67 @@ def test_reload_after_confirm_shows_no_error(page, live):
     page.reload()
     expect(page.get_by_role("heading", name="Confirm your email")).to_be_visible()
     assert page.get_by_role("alert").count() == 0
+
+
+def test_a_stale_requests_401_does_not_end_the_new_session(page, live):
+    email = _email()
+    _signup_and_confirm(page, live, email)
+    _login(page, email)
+    expect(page.get_by_role("heading", name="Overview")).to_be_visible()
+    status = page.evaluate("""async () => {
+      const api = await import('/app/js/api.js');
+      const good = sessionStorage.getItem('ha.token');
+      sessionStorage.setItem('ha.token', 'an-old-session');
+      const call = api.request('GET', '/auth/me').then(() => 200, (e) => e.status);
+      sessionStorage.setItem('ha.token', good);  // a new login before the answer arrives
+      return call;
+    }""")
+    assert status == 401
+    expect(page).to_have_url(re.compile(r"#/overview$"))
+    assert page.evaluate("sessionStorage.getItem('ha.token')") not in (None, "an-old-session")
+
+
+def test_session_ended_message_survives_parallel_401s(page, live):
+    email = _email()
+    _signup_and_confirm(page, live, email)
+    _login(page, email)
+    expect(page.get_by_role("heading", name="Overview")).to_be_visible()
+    page.evaluate("""async () => {
+      const api = await import('/app/js/api.js');
+      sessionStorage.setItem('ha.token', 'expired');
+      await Promise.allSettled([1, 2, 3].map(() => api.request('GET', '/auth/me')));
+    }""")
+    expect(page).to_have_url(re.compile(r"#/login$"))
+    expect(page.get_by_role("status")).to_have_text(SESSION_ENDED)
+    # worst case: two 401s handled in one task (a direct render, then the hashchange one)
+    page.goto("/app/#/overview")
+    page.evaluate("t => sessionStorage.setItem('ha.token', t)", _token(page, live, email))
+    page.goto("/app/#/overview")
+    expect(page.get_by_role("heading", name="Overview")).to_be_visible()
+    page.evaluate("""async () => {
+      const auth = await import('/app/js/auth.js');
+      const api = await import('/app/js/api.js');
+      auth.logout(api.SESSION_ENDED);
+      auth.logout(api.SESSION_ENDED);
+    }""")
+    expect(page).to_have_url(re.compile(r"#/login$"))
+    expect(page.get_by_role("status")).to_have_text(SESSION_ENDED)
+
+
+def _token(page, live, email):
+    r = httpx.post(f"{live.base_url}/auth/login", json={"email": email, "password": PW})
+    assert r.status_code == 200, r.text
+    return r.json()["access_token"]
+
+
+@pytest.mark.parametrize("hash_", ["#/login", "#/signup"])
+def test_logged_in_visit_to_login_or_signup_goes_to_overview(page, live, hash_):
+    email = _email()
+    _signup_and_confirm(page, live, email)
+    _login(page, email)
+    expect(page.get_by_role("heading", name="Overview")).to_be_visible()
+    page.goto(f"/app/{hash_}")
+    expect(page).to_have_url(re.compile(r"#/overview$"))
+    expect(page.get_by_role("heading", name="Overview")).to_be_visible()
+    page.goto("/app/#/reset")  # reset (like join and confirm) stays reachable
+    expect(page.get_by_role("button", name="Send reset link")).to_be_visible()

@@ -8,8 +8,9 @@ let fallback = "#/overview";
 // route("#/login", render, {public: true});
 // render(params: URLSearchParams, ctx) -> Node | {node, cleanup} (or a Promise of either);
 // `cleanup()` runs when the user leaves the route.
-export function route(hash, renderFn, { public: isPublic = false } = {}) {
-  routes.set(hash, { render: renderFn, isPublic });
+// `guestOnly`: with a session, the route redirects to the default route instead.
+export function route(hash, renderFn, { public: isPublic = false, guestOnly = false } = {}) {
+  routes.set(hash, { render: renderFn, isPublic, guestOnly });
 }
 
 export function navigate(hash) {
@@ -42,6 +43,7 @@ function render() {
   const entry = routes.get(path);
   if (!entry) return navigate(token() ? fallback : "#/login");
   if (!entry.isPublic && !token()) return navigate("#/login");
+  if (entry.guestOnly && token()) return navigate(fallback);
   Promise.resolve(onRender(entry, new URLSearchParams(query), path)).then((fn) => {
     if (typeof fn !== "function") return;
     if (mine === seq) cleanup = fn;
