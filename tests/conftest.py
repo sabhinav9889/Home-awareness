@@ -36,11 +36,13 @@ def pytest_configure(config):
     web tests TRUNCATE them, so two concurrent runs (e.g. two terminals or agents) wipe each
     other's data mid-test. A second run waits here until the first one exits."""
     global _db_lock
+    if hasattr(config, "workerinput"):  # xdist worker: the controller holds the lock
+        return
     if _db_lock is not None:
         return
     key = hashlib.sha256(TEST_DATABASE_URL.encode()).hexdigest()[:12]
-    path = os.path.join(tempfile.gettempdir(), f"home-awareness-tests-{key}.lock")
-    _db_lock = open(path, "w")  # noqa: SIM115  held (and the lock with it) until the process exits
+    path = os.path.join(tempfile.gettempdir(), f"home-awareness-tests-{os.getuid()}-{key}.lock")
+    _db_lock = open(path, "w")  # noqa: SIM115  held until pytest_unconfigure
     try:
         fcntl.flock(_db_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -48,6 +50,15 @@ def pytest_configure(config):
         started = time.monotonic()
         fcntl.flock(_db_lock, fcntl.LOCK_EX)
         print(f"…waited {time.monotonic() - started:.0f} s", file=sys.stderr)
+
+
+def pytest_unconfigure(config):
+    """Release and close the lock taken in pytest_configure."""
+    global _db_lock
+    if _db_lock is not None:
+        fcntl.flock(_db_lock, fcntl.LOCK_UN)
+        _db_lock.close()
+        _db_lock = None
 
 
 def require_test_database(url: str) -> None:

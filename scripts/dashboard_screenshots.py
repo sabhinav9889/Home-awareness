@@ -138,4 +138,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        db.pytest_unconfigure(None)
