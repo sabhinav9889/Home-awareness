@@ -39,6 +39,23 @@ emergency-service calling, radar/camera fall detection, a paid cloud tier.
 - Setup guide: `edge/README.md` (Linux + PipeWire). Note: your speaker is **muted** and mic gain is **0.18** in system settings — the live mic heard only silence during testing. I didn't change your settings.
 - A usage limit paused everything from about 02:30 to 04:00; work resumed automatically.
 
+### ✅ Plan 1b — enhancements: done, reviewed, merged into `main` (local only)
+`docs/superpowers/plans/2026-11-07-plan-1b-enhancements.md` — 6 tasks + final review + fix wave. **277 server tests + 260 edge tests pass.**
+- **Household timezone:** alerts now read e.g. "02:14 IST" (set at sign-up or by the owner; existing households stay UTC).
+- **Per-sound sensitivity from the measured accuracy:** siren/coughing/dog/crying default to 0.50, others 0.30; each member can override. The sensor reports the peak of a sound (0.5 s hold) and the server alerts each member at their own threshold — including when a second, closer sensor hears the same scream louder.
+- **Urgent ntfy priority** for scream, smoke alarm, glass, siren, explosion, fall, gasping → the phone can break through quiet mode (per your ntfy app settings). Telegram has no priority levels — README says so.
+- **Revocable agent tokens:** `ha-agent login` no longer expires after 24 h; tokens can only open the live feed and press "I'm on it"; re-login revokes the old one.
+- **Password reset signs out everything:** all logins and agent tokens stop working, pending invites from that account are cancelled, and the reset email tells you to regenerate your ntfy topic and check your Telegram link.
+- **Stuck alerts** older than 15 min are marked failed (visible, not silent); the Telegram webhook now also requires Telegram's secret header.
+- Reviews caught: uvicorn's own log line was writing login tokens from WebSocket URLs into server logs (now masked everywhere); a stolen login racing a password reset could mint a surviving agent token (closed).
+- **Upgrading note:** `README.md` → "Upgrading to 1b" (re-run Telegram setWebhook with `secret_token`, `alembic upgrade head`, re-run `ha-agent login`).
+
+## Rulings I made on your behalf (Plan 1b)
+1. When a second sensor hears an incident louder, members whose stricter threshold it newly meets are alerted. [none expected]
+2. The sensor waits one extra window (~0.5 s) and sends a sound's peak. [+0.5 s alert latency]
+3. A password reset cancels that account's pending invites.
+4. A password reset does NOT change your alert channels automatically (so your real phone never silently stops getting alerts); you're told to check them instead. [if someone hijacked your ntfy topic, they keep receiving alerts until you regenerate it]
+
 ## Rulings I made on your behalf (Plan 2)
 1. Audio uses PipeWire's tools (`pw-record`, `pw-dump`, `pw-play`) because PortAudio isn't installed and I can't sudo. [Linux/PipeWire only for now]
 2, 6. Some tasks ran two builders in parallel on separate files to save time. [none observed]
@@ -77,6 +94,7 @@ Each is something the plan/spec didn't settle; "cost if wrong" in brackets.
 28. Ran one extra targeted fix round beyond the normal process, because two bugs found at the end would have misled users.
 
 ## Needs you
-- **Household timezone:** alert messages show time in UTC for now. I plan to add a per-household timezone in the enhancements step; tell me if you'd rather default to IST.
+- **Quiet hours:** not built. For a safety tool I think urgent sounds must always break through; tell me if you want quiet hours for non-urgent sounds only.
+- **Your machine:** speaker is muted and mic gain is 0.18 — raise the mic level before relying on the laptop as a sensor.
 - **Commit identity check:** commits are `sabhinav9889 <sabhinav9889@gmail.com>` as you asked; nothing has been pushed.
 - **Telegram:** to get phone pushes you'll need to create a bot with BotFather (free) — steps in `README.md`. I didn't create any accounts.
