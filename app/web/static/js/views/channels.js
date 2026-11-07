@@ -23,7 +23,8 @@ function permissionText(p) {
     "arrives while this tab is in the background.";
   if (p === "denied") return "Browser notifications are blocked. Allow them in this site's " +
     "settings in your browser, then reload.";
-  return "Not enabled yet: without them, a background tab only beeps.";
+  return "Not enabled yet: a background tab stays silent — you'll only see the alert when " +
+    "you switch back.";
 }
 
 export async function channelsView() {

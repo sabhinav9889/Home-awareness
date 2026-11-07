@@ -201,6 +201,17 @@ def test_enable_browser_notifications_shows_the_result(new_page, live):
     assert page.evaluate("window.__permissionAsked") == 1
 
 
+def test_notifications_not_enabled_copy_is_accurate(new_page, live):
+    page = _page(new_page)
+    page.add_init_script("Notification.permission = 'default'")
+    m = _member(live)
+    _open(page, m, "#/channels")
+    expect(page.locator(".notify-msg")).to_have_text(
+        "Not enabled yet: a background tab stays silent — you'll only see the alert when you "
+        "switch back."
+    )
+
+
 def test_revoke_agent_token(page, live):
     m = _member(live)
     r = httpx.post(f"{live.base_url}/me/agent-tokens", json={"name": "Work laptop"},
