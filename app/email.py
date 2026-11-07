@@ -1,4 +1,4 @@
-import logging
+import sys
 from email.message import EmailMessage
 from typing import Protocol
 
@@ -6,16 +6,18 @@ import aiosmtplib
 
 from app.config import get_settings
 
-log = logging.getLogger(__name__)
-
 
 class EmailSender(Protocol):
     async def send(self, to: str, subject: str, body: str) -> None: ...
 
 
 class ConsoleEmailSender:
+    """Dev backend: the email *is* the output. Written straight to stderr, not through
+    logging, because the log redaction masks `token=` values and these links must stay usable
+    (`docker compose logs api | grep token=`). Never use it where logs are shared."""
+
     async def send(self, to: str, subject: str, body: str) -> None:
-        log.info("email to=%s subject=%s\n%s", to, subject, body)
+        print(f"email to={to} subject={subject}\n{body}", file=sys.stderr, flush=True)
 
 
 class SmtpEmailSender:
