@@ -416,12 +416,13 @@ main h1[tabindex="-1"]:focus { outline: none; } /* focused on each route, not a 
 .disclaimer { margin: 24px 0 0; font-size: 12px; color: var(--muted); }
 .disclaimer p { margin: 0 0 4px; }
 .night-msg { margin: 0; font-size: 14px; color: var(--teal-ink); }
-.night-msg:empty, .guard-notice:empty { display: none; }
-.night-msg.is-error, .guard-notice.is-error { color: var(--error-ink); }
+.night-msg:empty, .guard-notice:empty, .guard-error:empty { display: none; }
+.night-msg.is-error, .guard-notice.is-error, .guard-error { color: var(--error-ink); }
 .guard-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .guard-btn[aria-pressed="true"] { background: var(--orange); color: #FFFFFF; border-color: var(--orange); }
 .guard-state { font-weight: 600; font-size: 14px; }
-.guard-notice { margin: 0; padding: 8px 12px; border-radius: 10px; font-size: 14px; background: var(--teal-soft); color: var(--teal-ink); }
+.guard-notice, .guard-error { margin: 0; padding: 8px 12px; border-radius: 10px; font-size: 14px; background: var(--teal-soft); color: var(--teal-ink); }
+.guard-error { color: var(--error-ink); }
 
 .room-list { display: flex; flex-direction: column; gap: 12px; }
 .room-card { padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; min-width: 0; }

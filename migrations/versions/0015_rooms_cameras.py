@@ -81,7 +81,32 @@ def upgrade() -> None:
     )
 
 
+# The catalog before this branch (listed here so the migration never depends on app code).
+_PRE_BRANCH_SOUND_KEYS = (
+    "scream",
+    "shouting",
+    "crying",
+    "moaning",
+    "gasping",
+    "coughing",
+    "glass_breaking",
+    "door_slam",
+    "knocking",
+    "car_alarm",
+    "dog_barking",
+    "smoke_alarm",
+    "siren",
+    "explosion",
+    "running_water",
+    "thud_fall",
+    "doorbell",
+)
+
+
 def downgrade() -> None:
+    # Events of sounds the old catalog does not know would break the old code reading them.
+    keys = ", ".join(f"'{k}'" for k in _PRE_BRANCH_SOUND_KEYS)
+    op.execute(f"DELETE FROM events WHERE sound_key NOT IN ({keys})")
     op.drop_constraint("pairing_codes_room_id_fkey", "pairing_codes", type_="foreignkey")
     op.drop_column("pairing_codes", "consent_confirmed")
     op.drop_column("pairing_codes", "capabilities")

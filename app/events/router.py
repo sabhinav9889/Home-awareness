@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from redis.asyncio import Redis
+from sqlalchemy import exists
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
 
@@ -18,6 +19,8 @@ from app.devices.models import Device
 from app.disclaimer import DISCLAIMER
 from app.events.models import Event
 from app.events.schemas import EventAccepted, EventIn, EventOut
+from app.households.guarding import is_guarding
+from app.households.models import Household
 from app.live.hub import publish_to_household
 from app.metrics import ALERTS_CREATED, EVENTS_MERGED, EVENTS_RECEIVED
 from app.ratelimit import by_device_key, enforce, rate_limit
@@ -25,6 +28,7 @@ from app.redis import get_redis
 from app.rules.engine import RuleOutcome, process_event
 from app.rules.incidents import FIRED, NEW_FILES, NX_KEYS, check_incidents
 from app.snapshots import store
+from app.snapshots.models import Snapshot
 from app.tenancy import Tenant, get_tenant
 
 router = APIRouter(tags=["events"])
@@ -145,12 +149,20 @@ async def post_event(
         )
     )
     await session.flush()
+    if body.type == "person_away":
+        household = await session.get(Household, tenant.household_id)
+        if household is not None and not is_guarding(household, now):
+            # Ruling 5a-R9: a person in view while nobody is Away and it is not night is
+            # normal life. Keep the row, but raise nothing and keep no picture.
+            await session.commit()
+            EVENTS_RECEIVED.labels(event.sound_key).inc()
+            return EventAccepted(event_id=event.id, merged=False, alerts=0)
     snapshot = None
-    if jpeg is not None and "video" in device.capabilities.split(",") and device.send_snapshots:
-        snapshot = await store.save(session, tenant.household_id, event.id, jpeg)
-    outcome: RuleOutcome = await process_event(session, redis, event, time.time())
-    event.merged = outcome.merged
     try:
+        if jpeg is not None and "video" in device.capabilities.split(",") and device.send_snapshots:
+            snapshot = await store.save(session, tenant.household_id, event.id, jpeg)
+        outcome: RuleOutcome = await process_event(session, redis, event, time.time())
+        event.merged = outcome.merged
         await session.commit()
     except BaseException:
         store.forget_deferred_files(session)
@@ -244,7 +256,10 @@ async def list_events(
 ) -> list[EventOut]:
     query = (
         tenant.select(Event)
-        .add_columns(Device.name)
+        .add_columns(
+            Device.name,
+            exists().where(Snapshot.event_id == Event.id).label("has_snapshot"),
+        )
         .outerjoin(
             Device, (Device.id == Event.device_id) & (Device.household_id == Event.household_id)
         )
@@ -262,6 +277,7 @@ async def list_events(
             confidence=e.confidence,
             received_at=e.received_at,
             merged=e.merged,
+            has_snapshot=has_snapshot,
         )
-        for e, name in (await session.execute(query)).all()
+        for e, name, has_snapshot in (await session.execute(query)).all()
     ]

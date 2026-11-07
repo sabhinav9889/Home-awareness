@@ -391,3 +391,88 @@ def _open_any(page, member, hash_):
         _login(page, member)
     else:
         _open(page, member, hash_)
+
+
+# --- final review fixes ---
+
+
+def test_history_rows_loaded_from_the_server_offer_their_photo(new_page, live):
+    m = _member(live)
+    cam = _camera(live, m)
+    _camera_event(live, cam)
+    _camera_event(live, cam, image=False, type_="fall")
+    page = _page(new_page)
+    _login(page, m)
+    rows = page.get_by_role("table", name="Live events").locator("tbody tr")
+    expect(rows).to_have_count(2)
+    expect(rows.get_by_role("button", name="Photo")).to_have_count(1)  # only the one with a photo
+
+
+def test_a_failed_photo_fetch_is_retried_on_reopen(new_page, live):
+    m = _member(live)
+    cam = _camera(live, m)
+    page = _page(new_page)
+    _login(page, m)
+    _camera_event(live, cam)
+    calls = []
+
+    def flaky(route):
+        calls.append(1)
+        if len(calls) == 1:
+            route.fulfill(status=500, content_type="application/json", body='{"detail":"x"}')
+        else:
+            route.continue_()
+
+    page.route(re.compile(r"/snapshots/\d+$"), flaky)
+    btn = page.get_by_role("table", name="Live events").get_by_role("button", name="Photo")
+    btn.click()
+    expect(page.locator(".event-photo")).to_contain_text("Couldn't load the photo")
+    btn.click()  # close
+    expect(page.locator(".event-photo")).to_have_count(0)
+    btn.click()  # reopen: fetched again
+    expect(page.locator(".event-photo img")).to_have_attribute("src", re.compile(r"^blob:"))
+    assert len(calls) == 2
+
+
+def test_away_notice_shows_on_the_sensors_page_too(new_page, live):
+    m = _member(live)
+    other = _second_member(live, m)
+    page = new_page()
+    _login(page, m, "#/sensors")
+    expect(page.locator(".guard-notice")).to_have_text("")
+    _call(live, other, "PATCH", "/households/me", away=True)
+    expect(page.locator(".guard-notice")).to_have_text(f"{other.email} turned Away on")
+    _call(live, other, "PATCH", "/households/me", away=False)
+    expect(page.locator(".guard-notice")).to_have_text(f"{other.email} turned Away off")
+
+
+def test_sensor_list_refresh_waits_while_focus_is_inside_it(page, live):
+    from tests.web.test_overview import _device, _go_offline, _heartbeat
+
+    m = _member(live)
+    hall = _device(live, m, "Hall")
+    _heartbeat(live, hall)
+    _room(live, m, "Kitchen")
+    _open(page, m, "#/sensors")
+    row = page.locator(".device-row").filter(has_text="Hall")
+    expect(row).to_contain_text("Listening")
+    select = page.get_by_label("Room for Hall")
+    select.focus()
+    page.evaluate("document.activeElement.dataset.mark = 'same'")
+    with page.expect_response(lambda r: r.url.endswith("/rooms") and r.request.method == "GET"):
+        _go_offline(live, hall.id)  # publishes device_offline: the view refreshes
+    page.wait_for_timeout(300)
+    # The list was not rebuilt under the focused select, so the old state still shows.
+    assert page.evaluate("document.activeElement.dataset.mark") == "same"
+    expect(row).to_contain_text("Listening")
+    page.get_by_label("Camera name").focus()  # focus leaves the list: the refresh lands
+    expect(page.locator(".device-row").filter(has_text="Hall")).to_contain_text("Offline")
+
+
+def test_camera_kind_is_labelled_on_the_overview(page, live):
+    m = _member(live)
+    _camera(live, m)
+    from tests.web.test_overview import _open as open_overview
+
+    open_overview(page, m)
+    expect(page.locator(".sensor-card")).to_contain_text("Camera")

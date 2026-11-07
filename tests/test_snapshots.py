@@ -630,3 +630,18 @@ async def test_multipart_incident_key_is_422(client, signed_up, session):
         "/device/events", files={"event": (None, body), "snapshot": ("s.jpg", JPEG)}, headers=dk
     )
     assert r.status_code == 422
+
+
+@respx.mock
+async def test_telegram_5xx_ok_false_on_photo_retries_without_text_fallback(
+    signed_up, session, factory, redis, published, sleeps
+):
+    member, _ = await signed_up()
+    await _prefs(session, member, telegram=True, telegram_chat_id="42")
+    alert = await _with_snapshot(session, member)
+    photo = respx.post(f"https://api.telegram.org/bot{TOKEN}/sendPhoto").mock(
+        return_value=httpx.Response(502, json={"ok": False, "description": "bad gateway"})
+    )
+    msg = respx.post(TG_URL).mock(return_value=httpx.Response(200, json={"ok": True}))
+    await _run(alert, factory, redis, sleeps)
+    assert photo.call_count == 3 and not msg.called

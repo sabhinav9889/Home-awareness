@@ -2,7 +2,7 @@
 
 Sensors around a home listen locally for sounds a household cares about (a scream, breaking glass, a smoke alarm) and report short events to this server, which alerts each household member the way they chose: live in the browser, Telegram, or ntfy. Sensors send only the sound type, a confidence and a time; raw audio never reaches the server.
 
-> Home-awareness tool. Not a medical device, security alarm, or emergency service.
+> Home-awareness tool. Not a medical device, security alarm, or emergency service. Cameras send a single snapshot only when they raise an alert.
 
 ![Architecture](docs/architecture.png)
 
@@ -79,7 +79,7 @@ A camera sensor may attach one JPEG (at most 300 KB, 640 px on the longest side)
 1. Generate a key and put it in `.env` as `SNAPSHOT_KEY`:
    `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
    Keep it safe: without it stored snapshots cannot be read. If `SNAPSHOT_KEY` is set but not a valid key, the server refuses to start; if it is unset, events are accepted and images are dropped (one warning in the log).
-2. Images live in the `snapshots` Docker volume (`/data/snapshots`, shared by `api` and `worker`; set `SNAPSHOT_DIR` to move it). Back it up with the database if you want to keep images.
+2. Images live in the `snapshots` Docker volume (`/data/snapshots`, shared by `api` and `worker`; compose mounts it at a fixed `/data/snapshots`, so leave `SNAPSHOT_DIR` at its default there and change it only when running without compose). Back it up with the database if you want to keep images.
 3. Each household chooses how long images are kept (1, 7 or 30 days, default 7) and is capped at 200 MB; the oldest images go first. The worker's 5-minute sweep applies both, and also removes files left behind by a deleted household or event after a day.
 4. Privacy: an ntfy topic is public by name, and ntfy.sh keeps attachments for hours, so anyone who guesses the topic can see the photo. Use a long random topic, a self-hosted ntfy (`NTFY_BASE_URL`), or turn snapshots off for that camera.
 5. Fetch an image with `GET /snapshots/{event_id}` and a member's Bearer token or an agent token (`Cache-Control: private, no-store`).

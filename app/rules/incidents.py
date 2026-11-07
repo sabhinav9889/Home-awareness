@@ -59,10 +59,14 @@ RULES: tuple[Rule, ...] = (
     ),
 )
 INGREDIENT_KEYS = frozenset(k for r in RULES for k in r.first | r.second)
+# The ingredients a camera reports; the incident is attributed to that camera's device.
+CAMERA_KEYS = frozenset({"person_away", "fall"})
 
 
 async def _remember(redis: Redis, room_key: str, event: Event, has_snapshot: bool, now: float):
-    member = json.dumps([event.sound_key, event.id, event.confidence, has_snapshot])
+    member = json.dumps(
+        [event.sound_key, event.id, event.confidence, has_snapshot, event.device_id]
+    )
     pipe = redis.pipeline(transaction=False)
     pipe.zadd(room_key, {member: now})
     pipe.zremrangebyscore(room_key, "-inf", now - KEEP_S)
@@ -118,7 +122,10 @@ async def check_incidents(
         if not await redis.set(nx_key, 1, nx=True, ex=FIRE_ONCE_S):
             continue
         session.info.setdefault(NX_KEYS, []).append(nx_key)
-        ingredients = [[event.sound_key, event.id, event.confidence, has_snapshot], *partners]
+        ingredients = [
+            [event.sound_key, event.id, event.confidence, has_snapshot, event.device_id],
+            *partners,
+        ]
         alert_ids += await _fire(session, redis, rule, event, ingredients, now)
     return alert_ids
 
@@ -133,9 +140,14 @@ async def _fire(
     session: AsyncSession, redis: Redis, rule: Rule, trigger: Event, ingredients: list, now: float
 ) -> list[int]:
     at = datetime.fromtimestamp(now, UTC)
+    # The camera ingredient's device, not whichever event arrived second.
+    camera_device = next(
+        (i[4] for i in ingredients if i[0] in CAMERA_KEYS and len(i) > 4 and i[4] is not None),
+        trigger.device_id,
+    )
     incident = Event(
         household_id=trigger.household_id,
-        device_id=trigger.device_id,
+        device_id=camera_device,
         sound_key=rule.key,
         confidence=max(i[2] for i in ingredients),
         occurred_at=at,

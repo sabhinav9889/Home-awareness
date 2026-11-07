@@ -43,6 +43,13 @@ class HouseholdPatch(BaseModel):
     def _tz(cls, v: str | None) -> str | None:
         return None if v is None else validate_timezone(v)
 
+    @field_validator("night_start", "night_end")
+    @classmethod
+    def _naive_time(cls, v: time | None) -> time | None:
+        if v is not None and v.tzinfo is not None:
+            raise ValueError("night hours are local times: send HH:MM without a UTC offset")
+        return v
+
     @model_validator(mode="after")
     def _night_hours(self) -> "HouseholdPatch":
         sent = self.model_fields_set

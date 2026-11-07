@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.devices.models import Device
 from app.disclaimer import DISCLAIMER
-from app.rooms.models import Room
+from app.rooms.models import PRIVATE_ROOM_KINDS, Room
 from app.rooms.schemas import RoomIn, RoomOut, RoomPatch
 from app.tenancy import Tenant, get_tenant
 
@@ -71,6 +71,13 @@ async def patch_room(
         room.name = body.name
     if body.kind is not None:
         room.kind = body.kind
+        if body.kind in PRIVATE_ROOM_KINDS:
+            # Ruling 5a-R10: video devices already in the room stop sending snapshots.
+            await session.execute(
+                tenant.update(Device)
+                .where(Device.room_id == room_id, Device.capabilities.like("%video%"))
+                .values(send_snapshots=False)
+            )
     await _commit_unique(session)
     return room
 

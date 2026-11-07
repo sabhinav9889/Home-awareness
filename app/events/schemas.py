@@ -55,3 +55,4 @@ class EventOut(BaseModel):
     confidence: float
     received_at: datetime
     merged: bool = Field(description=MERGED_DOC)
+    has_snapshot: bool = False

@@ -30,6 +30,7 @@ async def test_heartbeat_marks_online_and_returns_union_config(client, signed_up
         "heartbeat_interval_s": 60,
         "thresholds": DEFAULT_THRESHOLDS,
         "guarding": False,
+        "send_snapshots": True,
     }
     device = await session.get(Device, device_id)
     await session.refresh(device)
@@ -79,6 +80,7 @@ async def test_get_config_does_not_touch_last_seen_or_limit(client, signed_up, s
             "heartbeat_interval_s": 60,
             "thresholds": DEFAULT_THRESHOLDS,
             "guarding": False,
+            "send_snapshots": True,
         }
     device = await session.get(Device, device_id)
     await session.refresh(device)

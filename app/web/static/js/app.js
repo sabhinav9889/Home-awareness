@@ -1,7 +1,7 @@
 // Entry point: registers routes and renders each view into the right layout.
 import { request } from "./api.js";
 import * as auth from "./auth.js";
-import { startLive, stopLive } from "./live.js";
+import { startLive, stopLive, subscribe } from "./live.js";
 import { route, start } from "./router.js";
 import { el, footer, message } from "./ui.js";
 import { confirmView, joinView, loginView, resetView, signupView } from "./views/auth.js";
@@ -39,6 +39,21 @@ route("#/household", householdView);
 const root = document.getElementById("root");
 let renderSeq = 0;
 
+// "<email> turned Away on/off" shows on every dashboard page, whoever flipped it (ruling
+// 5a-R8). One element, moved into each page's layout; the overview keeps its button state.
+const NOTICE_MS = 8000;
+const guardNotice = el("p", { class: "guard-notice", role: "status" });
+let guardNoticeTimer = null;
+subscribe({
+  onMessage: (msg) => {
+    if (msg.kind !== "guarding") return;
+    guardNotice.textContent =
+      `${msg.by_email || "Someone"} turned Away ${msg.away ? "on" : "off"}`;
+    clearTimeout(guardNoticeTimer);
+    guardNoticeTimer = setTimeout(() => { guardNotice.textContent = ""; }, NOTICE_MS);
+  },
+});
+
 function publicLayout(view) {
   return el("div", { class: "auth-layout" },
     el("div", { class: "brand" }, logo(), el("span", {}, "Home Awareness")),
@@ -75,7 +90,7 @@ function appLayout(view, path, household) {
         el("div", { class: "household-name" }, household.name),
         el("button", { type: "button", class: "btn btn-quiet", onclick: () => auth.logout() },
           "Log out"))),
-    el("main", { id: "main", class: "content" }, view, footer()));
+    el("main", { id: "main", class: "content" }, guardNotice, view, footer()));
 }
 
 // After a route renders, focus its h1 (so a screen reader announces the new page and Tab

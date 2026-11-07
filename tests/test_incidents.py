@@ -229,6 +229,7 @@ async def test_http_ingredients_alert_immediately_and_incident_follows(
     client, session, redis, signed_up, jobs
 ):
     member, h = await signed_up()
+    assert (await client.patch("/households/me", json={"away": True}, headers=h)).status_code == 200
     room = await _room(client, h, "Hall")
     _, mic = await _device(client, h, "Mic", room_id=room)
     _, cam = await _device(client, h, "Cam", room_id=room, camera=True)
@@ -283,6 +284,7 @@ async def test_incident_failure_after_sql_keeps_ingredient_body_and_keys(
 
     member, h = await signed_up()
     hid = member.household_id  # read now: the rollback under test expires `member`
+    assert (await client.patch("/households/me", json={"away": True}, headers=h)).status_code == 200
     room = await _room(client, h, "Hall")
     dev, mic = await _device(client, h, room_id=room)
     real = incidents.process_event
@@ -315,6 +317,7 @@ async def test_commit_failure_after_incident_keeps_ingredient_body(
 ):
     member, h = await signed_up()
     hid = member.household_id
+    assert (await client.patch("/households/me", json={"away": True}, headers=h)).status_code == 200
     room = await _room(client, h, "Hall")
     _, mic = await _device(client, h, room_id=room)
 

@@ -164,6 +164,7 @@ async def test_history_newest_first_paginated_and_scoped(client, signed_up, two_
         "confidence",
         "received_at",
         "merged",
+        "has_snapshot",
     }
 
     page1 = (await client.get("/events?limit=2", headers=headers_a)).json()

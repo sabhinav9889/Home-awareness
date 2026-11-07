@@ -25,6 +25,7 @@ export async function sensorsView() {
   let rooms = [];
   let isOwner = false;
   let refreshing = false;
+  let listStale = false; // a refresh arrived while focus was inside the list
   const unsubscribe = subscribe({
     onMessage: (msg) => {
       if (msg.kind === "device_online" || msg.kind === "device_offline") refresh();
@@ -44,6 +45,15 @@ export async function sensorsView() {
   const listBox = el("div", { class: "device-list" });
   const listMsg = el("div", { class: "msgs" });
   const countEl = el("span", { class: "muted" });
+  listBox.addEventListener("focusout", () => {
+    // After the focus move settles: still inside the list (tabbing between its controls)
+    // means keep waiting.
+    setTimeout(() => {
+      if (!listStale || closed || listBox.contains(document.activeElement)) return;
+      listStale = false;
+      renderList();
+    }, 0);
+  });
 
   async function refresh() {
     if (refreshing || closed) return;
@@ -56,7 +66,10 @@ export async function sensorsView() {
       devices = rows;
       rooms = roomRows;
       if (!document.getElementById("cam-room")?.matches(":focus")) renderRoomPick();
-      renderList();
+      // Never rebuild the list under someone's focus (a select or switch in use): do it
+      // when focus leaves instead.
+      if (listBox.contains(document.activeElement)) listStale = true;
+      else renderList();
     } catch { /* the next tick retries; a 401 already logged out */ }
     finally {
       refreshing = false;
@@ -172,6 +185,7 @@ export async function sensorsView() {
   }
 
   function renderList() {
+    listStale = false;
     const rows = [...devices].sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
     countEl.textContent = ` · ${rows.length}`;
     listBox.replaceChildren(...(rows.length ? rows.map(deviceRow)

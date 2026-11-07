@@ -77,3 +77,5 @@ class DeviceConfigOut(BaseModel):
     # True while the household is Away or inside its night hours: cameras then treat a
     # person in view as an alert (`person_away`).
     guarding: bool = False
+    # Owner's switch: whether this device may attach a snapshot to an alert.
+    send_snapshots: bool = True

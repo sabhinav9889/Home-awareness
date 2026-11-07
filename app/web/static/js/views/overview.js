@@ -17,12 +17,14 @@ const DEVICES_REFRESH_MS = 30_000; // fresh last_seen_at; first heartbeats publi
 const FIRST_CONNECT_WAIT_MS = 3000; // load the data once the socket listens (or gave up)
 const ALERTS_REFRESH_MS = 800; // after a live event: did it alert me?
 const EARLY_MAX = 500; // messages held while loading; past this, catch up instead
-const NOTICE_MS = 8000; // how long "X turned Away on" stays
+const NOTICE_MS = 8000; // how long an Away toggle error stays
 
 // Shown when the sensor's heartbeat says its microphone input level is clipping.
 export const MIC_CLIPPING_NOTE = "Microphone is overloading — lower its input level";
 
-export const KINDS = { laptop: "Laptop", phone: "Phone", pi: "Raspberry Pi", other: "Sensor" };
+export const KINDS = {
+  laptop: "Laptop", phone: "Phone", pi: "Raspberry Pi", camera: "Camera", other: "Sensor",
+};
 
 function validTimeZone(tz) {
   try {
@@ -283,8 +285,8 @@ export async function overviewView(_params, { household }) {
     const ph = photos.get(e.id);
     const body = ph && ph.state === "ready"
       ? el("img", { src: ph.url, alt: `Camera snapshot: ${e.label}`, class: "event-photo-img" })
-      : el("span", { class: "muted" }, ph && ph.state === "missing" ? "No photo"
-        : "Loading photo…");
+      : el("span", { class: "muted" }, !ph ? "Couldn't load the photo. Close and reopen to retry."
+        : ph.state === "missing" ? "No photo" : "Loading photo…");
     return el("tr", { class: "event-photo-row" },
       el("td", { colspan: 5, class: "event-photo" }, body));
   }
@@ -295,7 +297,13 @@ export async function overviewView(_params, { household }) {
     let blob = null;
     try {
       blob = await requestBlob(`/snapshots/${encodeURIComponent(id)}`);
-    } catch { /* shown as "No photo"; the person can close and reopen to retry */ }
+    } catch {
+      // A failed fetch (not a 404) is not cached: closing and reopening the row retries.
+      if (closed) return;
+      photos.delete(id);
+      renderEvents();
+      return;
+    }
     if (closed) return;
     if (blob) photos.set(id, { state: "ready", url: URL.createObjectURL(blob) });
     else photos.set(id, { state: "missing", url: null });
@@ -306,13 +314,13 @@ export async function overviewView(_params, { household }) {
   const guardState = el("span", { class: "guard-state" });
   const guardBtn = el("button", { type: "button", class: "btn btn-quiet guard-btn",
     "aria-pressed": "false" }, "Away");
-  const guardNotice = el("p", { class: "guard-notice", role: "status" });
+  // Errors of this button only; the "who turned Away on/off" notice is global (app.js).
+  const guardError = el("p", { class: "guard-error is-error", role: "alert" });
   let noticeTimer = null;
-  function setNotice(text, isError = false) {
-    guardNotice.className = `guard-notice${isError ? " is-error" : ""}`;
-    guardNotice.textContent = text;
+  function setNotice(text) {
+    guardError.textContent = text;
     clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(() => { guardNotice.textContent = ""; }, NOTICE_MS);
+    noticeTimer = setTimeout(() => { guardError.textContent = ""; }, NOTICE_MS);
   }
   function renderGuard() {
     guardBtn.setAttribute("aria-pressed", String(guard.away));
@@ -325,10 +333,10 @@ export async function overviewView(_params, { household }) {
     guardBtn.disabled = true;
     try {
       const out = await request("PATCH", "/households/me", { away: !guard.away });
-      guard.away = out.away; // the live message adds the "who" notice, for every tab
+      guard.away = out.away; // the live message adds the "who" notice (app.js), for every tab
       renderGuard();
     } catch (err) {
-      setNotice(err.detail || err.message, true);
+      setNotice(err.detail || err.message);
     } finally {
       guardBtn.disabled = false;
     }
@@ -453,7 +461,6 @@ export async function overviewView(_params, { household }) {
       case "guarding":
         guard.away = Boolean(msg.away);
         renderGuard();
-        setNotice(`${msg.by_email || "Someone"} turned Away ${guard.away ? "on" : "off"}`);
         break;
       default: // alert_ack etc.: handled by later views
     }
@@ -472,7 +479,7 @@ export async function overviewView(_params, { household }) {
   const node = el("section", { class: "stack overview" },
     el("header", { class: "page-head" }, el("h1", {}, "Overview"), pill),
     el("div", { class: "guard-bar" }, guardBtn, guardState),
-    guardNotice,
+    guardError,
     statusBox,
     el("section", { class: "sensors", "aria-labelledby": "sensors-h" },
       el("h2", { id: "sensors-h" }, "Sensors"), sensorGrid),

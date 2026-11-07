@@ -181,7 +181,11 @@ async def patch_device(
         device.name = body.name
     if "room_id" in body.model_fields_set:
         if body.room_id is not None:
-            await tenant.get(Room, body.room_id)
+            room = await tenant.get(Room, body.room_id)
+            # Ruling 5a-R10: a camera moved into a bedroom or bathroom stops sending
+            # snapshots; the owner can turn it back on.
+            if room.kind in PRIVATE_ROOM_KINDS and "video" in device.capabilities:
+                device.send_snapshots = False
         device.room_id = body.room_id
     if body.send_snapshots is not None:
         device.send_snapshots = body.send_snapshots
@@ -230,6 +234,7 @@ async def _config(session: AsyncSession, device: Device) -> DeviceConfigOut:
         heartbeat_interval_s=HEARTBEAT_INTERVAL_S,
         thresholds=dict(sorted(thresholds.items())),
         guarding=is_guarding(household, datetime.now(UTC)),
+        send_snapshots=device.send_snapshots,
     )
 
 
