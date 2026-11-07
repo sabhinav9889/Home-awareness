@@ -173,3 +173,19 @@ def test_held_candidate_dropped_if_sound_disabled_meanwhile():
     d.process(sc(i0=0.9), 0.0, ALL, False)
     assert d.process(sc(i0=0.9), 0.5, frozenset({"siren"}), False) == []
     assert d.flush() == []
+
+
+def test_rule_index_applies_min_score_and_unless_stronger():
+    from ha_edge.labels import IndexRule
+
+    idx = {"doorbell": (IndexRule(0), IndexRule(1, min_score=0.5, unless_stronger=(2,)))}
+    d = Detector(idx, threshold=0.4)  # boosted 0.6
+    assert emit(d, np.array([0.0, 0.45, 0.0], dtype=np.float32), 0.0, frozenset(idx)) == []
+    assert emit(d, np.array([0.0, 0.6, 0.7], dtype=np.float32), 3.0, frozenset(idx)) == []
+    out = emit(d, np.array([0.0, 0.6, 0.6], dtype=np.float32), 6.0, frozenset(idx))
+    assert out == [Detection("doorbell", pytest.approx(0.6), 6.0)]
+    # the unless-stronger label counts towards the required vector length
+    with pytest.raises(ValueError):
+        d.process(np.zeros(2), 9.0, frozenset(idx), False)
+    assert not d.playback_matters(np.array([0.0, 0.45, 0.0]), frozenset(idx))
+    assert d.playback_matters(np.array([0.0, 0.55, 0.0]), frozenset(idx))

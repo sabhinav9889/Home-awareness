@@ -7,10 +7,12 @@ member with a stricter threshold would never see it). Debounce counts from the e
 """
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
+
+from ha_edge.labels import IndexRule, sound_confidence
 
 MIN_THRESHOLD = 0.05
 MAX_THRESHOLD = 0.95
@@ -26,18 +28,33 @@ class Detection:
 class Detector:
     def __init__(
         self,
-        index: dict[str, list[int]],
+        index: Mapping[str, Sequence[int | IndexRule]],
         threshold: float = 0.30,
         boost: float = 0.20,
         debounce_s: float = 2.0,
         num_classes: int | None = None,
     ) -> None:
-        self._index = index
+        # Plain class indices (as in older callers and tests) are unconditional rules.
+        self._index: dict[str, tuple[IndexRule, ...]] = {
+            sound: tuple(r if isinstance(r, IndexRule) else IndexRule(r) for r in rules)
+            for sound, rules in index.items()
+        }
         self._threshold = threshold
         self._boost = boost
         self._debounce_s = debounce_s
         self._num_classes = num_classes
-        self._needed = max((i for idx in index.values() for i in idx), default=-1) + 1
+        self._needed = (
+            max(
+                (
+                    i
+                    for rules in self._index.values()
+                    for r in rules
+                    for i in (r.index, *r.unless_stronger)
+                ),
+                default=-1,
+            )
+            + 1
+        )
         self._last_emit: dict[str, float] = {}
         self._held: dict[str, Detection] = {}
 
@@ -62,12 +79,12 @@ class Detector:
         thresholds as ``process``.
         """
         scores = np.asarray(scores)
-        for sound, idxs in self._index.items():
+        for sound, rules in self._index.items():
             if sound not in enabled:
                 continue
             base = self._base(sound, thresholds)
             boosted = min(base + self._boost, MAX_THRESHOLD)
-            if base <= float(scores[idxs].max()) < boosted:
+            if base <= sound_confidence(scores, rules) < boosted:
                 return True
         return False
 
@@ -87,11 +104,11 @@ class Detector:
             raise ValueError(f"scores too short: {scores.shape[0]} < {self._needed}")
         boost = self._boost if playing else 0.0
         out: list[Detection] = []
-        for sound, idxs in self._index.items():
+        for sound, rules in self._index.items():
             if sound not in enabled:
                 continue
             limit = min(self._base(sound, thresholds) + boost, MAX_THRESHOLD)
-            conf = float(scores[idxs].max())
+            conf = sound_confidence(scores, rules)
             hit = conf >= limit
             held = self._held.pop(sound, None)
             if held is not None:
