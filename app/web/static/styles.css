@@ -203,3 +203,30 @@ h2 { font-size: 16px; }
   .status-card { padding: 20px; }
   .status-counts { gap: 20px; }
 }
+
+/* Sounds & rules */
+.sounds { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.snd-intro { margin: 0; padding: 14px 18px; border-radius: 12px; background: var(--teal-soft); color: #134E4A; font-size: 14px; line-height: 1.5; }
+.snd-group { gap: 0; padding: 8px 20px 12px; }
+.snd-group-title { margin: 12px 0 4px; font: 600 13px var(--font); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.snd-row { padding: 12px 0; border-top: 1px solid #EEF0F3; display: flex; flex-direction: column; gap: 10px; }
+.snd-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.snd-label { font-weight: 600; font-size: 15px; }
+.switch {
+  position: relative; flex: none; width: 44px; height: 26px; padding: 0; border: 0; border-radius: 999px;
+  background: #6B7280; cursor: pointer;
+}
+.switch[aria-checked="true"] { background: var(--teal); }
+.switch .knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform .15s; }
+.switch[aria-checked="true"] .knob { transform: translateX(18px); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.badge-good { background: #DCFCE7; color: #166534; }
+.badge-fair { background: #FEF3C7; color: #92400E; }
+.badge-experimental { background: #F3E8FF; color: #6B21A8; }
+.badge-urgent { background: #FFEDD5; color: #9A3412; }
+.snd-fields { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+.snd-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink-2); min-width: 0; }
+.snd-field input { width: 110px; max-width: 100%; padding: 8px 10px; border: 1px solid #9CA3AF; border-radius: 8px; font: 400 16px var(--font); }
+.link-btn { align-self: flex-start; background: none; border: 0; padding: 0; color: var(--teal); text-decoration: underline; font: 600 13px var(--font); cursor: pointer; }
+.row-error { margin: 0; padding: 8px 12px; border-radius: 8px; background: var(--error-bg); color: var(--error-ink); font-size: 14px; }
+.snd-note { margin: 0; }

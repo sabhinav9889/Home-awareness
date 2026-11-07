@@ -5,15 +5,20 @@ import { route, start } from "./router.js";
 import { el, footer, message } from "./ui.js";
 import { confirmView, loginView, resetView, signupView } from "./views/auth.js";
 import { overviewView } from "./views/overview.js";
+import { soundsView } from "./views/sounds.js";
 
 // Sidebar entries; later views add theirs here.
-const NAV = [{ hash: "#/overview", label: "Overview" }];
+const NAV = [
+  { hash: "#/overview", label: "Overview" },
+  { hash: "#/sounds", label: "Sounds & rules" },
+];
 
 route("#/login", loginView, { public: true });
 route("#/signup", signupView, { public: true });
 route("#/confirm", confirmView, { public: true });
 route("#/reset", resetView, { public: true });
 route("#/overview", overviewView);
+route("#/sounds", soundsView);
 
 const root = document.getElementById("root");
 let renderSeq = 0;
