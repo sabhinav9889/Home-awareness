@@ -257,6 +257,7 @@ h2 { font-size: 16px; }
   background: var(--alert-bg); color: #F8FAFC;
   display: flex; justify-content: center;
 }
+main h1[tabindex="-1"]:focus { outline: none; } /* focused on each route, not a control */
 .alert-screen:focus { outline: none; }
 .alert-inner {
   width: 100%; max-width: 480px; min-height: 100%;

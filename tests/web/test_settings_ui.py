@@ -130,6 +130,44 @@ def test_popup_switch_puts_the_full_body(page, live):
     assert _get(live, m, "/me/alert-preferences")["alarm"] is True
 
 
+def test_keyboard_toggling_keeps_focus_on_the_switch(page, live):
+    m = _member(live)
+    _open(page, m, "#/channels")
+    sw = page.get_by_role("switch", name="Alarm sound")
+    sw.focus()
+    for expected in ("true", "false", "true"):
+        with page.expect_response(lambda r: r.request.method == "PUT"):
+            page.keyboard.press("Space")
+        expect(sw).to_have_attribute("aria-checked", expected)
+        expect(sw).to_be_enabled()
+        expect(sw).to_be_focused()
+    assert _get(live, m, "/me/alert-preferences")["alarm"] is True
+    with page.expect_response(re.compile(r"/ntfy-topic$")):
+        page.get_by_role("button", name="Generate topic").focus()
+        page.keyboard.press("Enter")
+    expect(page.locator(".ntfy-topic")).to_be_visible()
+    # "Generate topic" is gone: focus moves to the first control of the same channel
+    expect(page.get_by_role("button", name="Copy")).to_be_focused()
+    with page.expect_response(lambda r: r.request.method == "PUT"):
+        page.get_by_role("button", name="Remove topic").focus()
+        page.keyboard.press("Enter")
+    expect(page.locator(".ntfy-topic")).to_have_count(0)
+    # the removed button is gone: focus lands on its replacement, not the page body
+    expect(page.get_by_role("button", name="Generate topic")).to_be_focused()
+
+
+def test_each_route_focuses_its_heading(page, live):
+    m = _member(live)
+    _open(page, m, "#/sensors")
+    expect(page.get_by_role("heading", level=1, name="Sensors")).to_be_focused()
+    for link, heading in (("Overview", "Overview"), ("Alert channels", "Alert channels"),
+                          ("Household", "Household"), ("Sounds & rules", "Sounds & rules")):
+        page.get_by_role("link", name=link).click()
+        expect(page.get_by_role("heading", level=1, name=heading)).to_be_focused()
+    page.get_by_role("button", name="Log out").click()
+    expect(page.get_by_role("heading", level=1, name="Log in")).to_be_focused()
+
+
 def test_generate_ntfy_topic_persists_after_reload(page, live):
     m = _member(live)
     _open(page, m, "#/channels")

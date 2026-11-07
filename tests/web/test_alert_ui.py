@@ -220,6 +220,17 @@ def test_test_alert_takes_over_the_overview_and_the_sounds_view(new_page, live):
     expect(_screen(page).get_by_role("heading")).to_have_text("Test alert")
 
 
+def test_a_route_render_does_not_steal_focus_from_the_alert_screen(new_page, live):
+    page = _page(new_page)
+    m = _member(live)
+    _login(page, m)
+    _test_alert(live, m)
+    expect(_screen(page)).to_be_focused()
+    page.evaluate("location.hash = '#/sensors'")
+    expect(page.locator("main h1")).to_have_text("Sensors")
+    expect(_screen(page)).to_be_focused()
+
+
 def test_alert_survives_navigation_and_one_socket_serves_every_view(new_page, live):
     page = _page(new_page)
     sockets = []

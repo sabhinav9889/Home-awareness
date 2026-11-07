@@ -1,7 +1,8 @@
 // Alert channels: popup / alarm / Telegram / ntfy for me, a test alert, browser notification
 // permission, and my laptop agents. Every PUT re-reads the preferences first and sends the
 // full body from that fresh state, so a change made in another tab is never overwritten.
-// Saves run one at a time.
+// Saves run one at a time. A re-render keeps keyboard focus on the same control (data-key),
+// or on the first control of the same channel (data-row) if that one is gone.
 import { request } from "../api.js";
 import { confirmDialog, copyText, el, show } from "../ui.js";
 import { ago } from "./overview.js";
@@ -59,14 +60,44 @@ export async function channelsView() {
     });
   }
 
+  // Focus to restore after a re-render: set when a control in the list is used, because a
+  // control that is disabled (or replaced) while its save runs loses focus to <body>.
+  let refocus = null; // {key, row}
+  function remember(node) {
+    const active = document.activeElement;
+    if (!active || active === document.body || !list.contains(active)) return;
+    const row = active.closest("[data-row]");
+    refocus = { key: active.dataset.key || node?.dataset.key, row: row && row.dataset.row };
+  }
+  function restoreFocus() {
+    if (!refocus) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && !list.contains(active)) {
+      refocus = null; // the person has moved on
+      return;
+    }
+    const usable = (n) => n && !n.disabled && n.isConnected;
+    let target = list.querySelector(`[data-key="${refocus.key}"]`);
+    if (target && target.disabled) return; // still saving: try again after it re-enables
+    if (!usable(target) && refocus.row) {
+      target = [...list.querySelectorAll(`[data-row="${refocus.row}"] button, ` +
+        `[data-row="${refocus.row}"] a[href]`)].find(usable);
+    }
+    refocus = null;
+    if (usable(target) && target !== active) target.focus();
+  }
+
   function switchFor(key, label) {
     const sw = el("button", { type: "button", role: "switch", class: "switch",
-      "aria-label": label }, el("span", { class: "knob" }));
+      "aria-label": label, "data-key": `sw-${key}` }, el("span", { class: "knob" }));
     sw.addEventListener("click", () => {
       const next = !prefs[key];
       sw.setAttribute("aria-checked", String(next));
       sw.disabled = true;
-      change(() => put({ [key]: next })).then(() => { sw.disabled = false; });
+      change(() => put({ [key]: next })).then(() => {
+        sw.disabled = false;
+        restoreFocus();
+      });
     });
     return sw;
   }
@@ -74,8 +105,8 @@ export async function channelsView() {
   const alarmSw = switchFor("alarm", "Alarm sound");
   const telegramSw = switchFor("telegram", "Telegram");
 
-  function row(title, desc, control, ...extra) {
-    return el("div", { class: "ch-item" },
+  function row(id, title, desc, control, ...extra) {
+    return el("div", { class: "ch-item", "data-row": id },
       el("div", { class: "ch-text" },
         el("div", { class: "ch-title" }, title),
         el("div", { class: "ch-desc" }, desc), ...extra),
@@ -108,7 +139,8 @@ export async function channelsView() {
 
   function telegramExtra() {
     if (prefs.telegram_linked) {
-      const unlink = el("button", { type: "button", class: "link-btn" }, "Unlink");
+      const unlink = el("button", { type: "button", class: "link-btn", "data-key": "tg-unlink" },
+        "Unlink");
       unlink.addEventListener("click", () => {
         unlink.disabled = true;
         change(async () => {
@@ -119,14 +151,15 @@ export async function channelsView() {
       return [el("div", { class: "ch-status" }, "Linked to your Telegram account. ", unlink)];
     }
     const button = el("button", { type: "button", class: "btn btn-quiet btn-small",
-      disabled: telegramUnavailable }, "Link Telegram");
+      disabled: telegramUnavailable, "data-key": "tg-link" }, "Link Telegram");
     button.addEventListener("click", () => linkTelegram(button));
     const parts = [el("div", { class: "ch-actions" }, button), tgMsg];
     if (telegramUnavailable) {
       parts.push(el("p", { class: "ch-note" }, "Telegram isn't set up on this server. " +
         "Whoever runs it can add a bot (see the README)."));
     } else if (deepLink) {
-      const check = el("button", { type: "button", class: "link-btn" }, "I pressed Start");
+      const check = el("button", { type: "button", class: "link-btn", "data-key": "tg-check" },
+        "I pressed Start");
       check.addEventListener("click", () => {
         change(() => request("GET", "/me/alert-preferences")).then(() => {
           if (!prefs.telegram_linked) show(tgMsg, "Not linked yet: open the link and press " +
@@ -159,18 +192,20 @@ export async function channelsView() {
   }
   function ntfyExtra() {
     if (!prefs.ntfy_topic) {
-      const gen = el("button", { type: "button", class: "btn btn-quiet btn-small" },
-        "Generate topic");
+      const gen = el("button", { type: "button", class: "btn btn-quiet btn-small",
+        "data-key": "ntfy-generate" }, "Generate topic");
       gen.addEventListener("click", generateTopic(false));
       return [el("div", { class: "ch-actions" }, gen)];
     }
     const topic = prefs.ntfy_topic;
-    const copy = el("button", { type: "button", class: "btn btn-quiet btn-small" }, "Copy");
+    const copy = el("button", { type: "button", class: "btn btn-quiet btn-small",
+      "data-key": "ntfy-copy" }, "Copy");
     copy.addEventListener("click", async () => show(ntfyMsg, await copyText(topic)));
-    const again = el("button", { type: "button", class: "btn btn-quiet btn-small" }, "New topic");
+    const again = el("button", { type: "button", class: "btn btn-quiet btn-small",
+      "data-key": "ntfy-new" }, "New topic");
     again.addEventListener("click", generateTopic(true));
-    const remove = el("button", { type: "button", class: "btn btn-quiet btn-small" },
-      "Remove topic");
+    const remove = el("button", { type: "button", class: "btn btn-quiet btn-small",
+      "data-key": "ntfy-remove" }, "Remove topic");
     remove.addEventListener("click", () => {
       remove.disabled = true;
       change(() => put({ ntfy_topic: null }));
@@ -183,18 +218,20 @@ export async function channelsView() {
   }
 
   const list = el("div", { class: "ch-list" });
+  list.addEventListener("click", (ev) => remember(ev.target.closest("[data-key]")), true);
   function render() {
     popupSw.setAttribute("aria-checked", String(prefs.popup));
     alarmSw.setAttribute("aria-checked", String(prefs.alarm));
     telegramSw.setAttribute("aria-checked", String(prefs.telegram));
     list.replaceChildren(
-      row("Popup", "On the dashboard and on your laptop, even with music playing.", popupSw),
-      row("Alarm sound", "Plays through whatever you are listening on, so your headphones " +
+      row("popup", "Popup", "On the dashboard and on your laptop, even with music playing.", popupSw),
+      row("alarm", "Alarm sound", "Plays through whatever you are listening on, so your headphones " +
         "when they are in.", alarmSw),
-      row("Telegram", "A push on your phone. Works when your laptop is off.",
+      row("telegram", "Telegram", "A push on your phone. Works when your laptop is off.",
         prefs.telegram_linked ? telegramSw : null, ...telegramExtra()),
-      row("ntfy", "Push through the free ntfy app, on a secret topic only you know.",
+      row("ntfy", "ntfy", "Push through the free ntfy app, on a secret topic only you know.",
         null, ...ntfyExtra()));
+    restoreFocus();
   }
   render();
 

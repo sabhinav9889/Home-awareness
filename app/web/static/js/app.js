@@ -75,6 +75,16 @@ function appLayout(view, path, household) {
     el("main", { id: "main", class: "content" }, view, footer()));
 }
 
+// After a route renders, focus its h1 (so a screen reader announces the new page and Tab
+// starts from it), unless the alert screen is open: that keeps focus.
+function focusHeading() {
+  if (document.querySelector(".alert-screen")) return;
+  const h1 = root.querySelector("main h1");
+  if (!h1) return;
+  h1.tabIndex = -1;
+  h1.focus({ preventScroll: true });
+}
+
 async function renderRoute(entry, params, path) {
   const seq = ++renderSeq;
   try {
@@ -86,6 +96,7 @@ async function renderRoute(entry, params, path) {
       if (seq === renderSeq) {
         root.replaceChildren(publicLayout(view));
         if (path !== "#/login") auth.clearFlash();
+        focusHeading();
       }
       return;
     }
@@ -97,7 +108,10 @@ async function renderRoute(entry, params, path) {
     alertScreen.start({ timezone: household.timezone });
     const result = await entry.render(params, { household });
     const { node, cleanup } = result instanceof Node ? { node: result } : result;
-    if (seq === renderSeq) root.replaceChildren(appLayout(node, path, household));
+    if (seq === renderSeq) {
+      root.replaceChildren(appLayout(node, path, household));
+      focusHeading();
+    }
     return cleanup; // the router runs it on leaving (or at once if this render is stale)
   } catch (err) {
     if (seq !== renderSeq || err.status === 401) return; // a 401 already went to login
