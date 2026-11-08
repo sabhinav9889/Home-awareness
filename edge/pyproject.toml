@@ -13,9 +13,13 @@ dependencies = [
   "desktop-notifier",
 ]
 
+[project.optional-dependencies]
+camera = ["mediapipe", "opencv-python-headless"]
+
 [project.scripts]
 ha-sensor = "ha_edge.cli:sensor_main"
 ha-agent = "ha_edge.cli:agent_main"
+ha-camera = "ha_edge.camera.cli:main"
 
 [dependency-groups]
 dev = ["pytest", "pytest-asyncio", "respx", "ruff"]
@@ -31,7 +35,10 @@ packages = ["src/ha_edge"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-markers = ["model: needs the real YAMNet .tflite (run `ha-sensor fetch-model`)"]
+markers = [
+  "model: needs the real YAMNet .tflite (run `ha-sensor fetch-model`)",
+  "camera: needs the camera extra and the MediaPipe models (run `ha-camera fetch-model`)",
+]
 
 [tool.ruff]
 line-length = 100

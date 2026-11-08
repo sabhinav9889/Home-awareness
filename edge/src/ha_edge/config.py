@@ -24,6 +24,15 @@ class SensorConfig:
 
 
 @dataclass
+class CameraConfig:
+    base_url: str
+    device_id: int
+    device_key: str
+    camera_name: str | None = None
+    camera_index: int | None = None
+
+
+@dataclass
 class AgentConfig:
     base_url: str
     email: str
@@ -97,3 +106,11 @@ def save_agent(cfg: AgentConfig) -> Path:
 
 def load_agent() -> AgentConfig | None:
     return _load("agent.json", AgentConfig)
+
+
+def save_camera(cfg: CameraConfig) -> Path:
+    return _save("camera.json", cfg)
+
+
+def load_camera() -> CameraConfig | None:
+    return _load("camera.json", CameraConfig)
