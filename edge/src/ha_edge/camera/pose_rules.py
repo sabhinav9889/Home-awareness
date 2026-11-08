@@ -17,6 +17,9 @@ MAX_MOTION = 0.03
 LYING_GAP_RESET_S = 5.0
 TRACK_MIN_HITS = 3
 TRACK_OF = 5
+BAD_WINDOW = 5
+BAD_SAMPLES_RESTART = 3  # lying-still: bad samples (of the last 5) that restart the clock
+BAD_SPAN_RESTART_S = 1.5  # ... or two bad samples this far apart
 
 Point = tuple[float, float, float]  # x, y (0-1 image coords), visibility
 
@@ -71,10 +74,14 @@ class FallDetector:
         self.min_drop = min_drop
         self._win: deque[TorsoSample] = deque()
         self._armed = True
+        self._last_t: float | None = None
 
     def update(self, sample: TorsoSample | None) -> bool:
         if sample is None:
             return False
+        if self._last_t is not None and sample.t <= self._last_t:
+            return False  # not newer than the last sample: a clock glitch, never evidence
+        self._last_t = sample.t
         while self._win and sample.t - self._win[0].t > self.window_s:
             self._win.popleft()
         self._win.append(sample)
@@ -112,9 +119,12 @@ class LyingStillDetector:
         self._anchor: TorsoSample | None = None
         self._last_t: float | None = None
         self._armed = True
+        # (t, bad, upright) of the last few samples; a bad one breaks the lying-still episode
+        self._recent: deque[tuple[float, bool, bool]] = deque(maxlen=BAD_WINDOW)
 
     def _reset(self) -> None:
         self._anchor = None
+        self._recent.clear()
 
     def rearm(self) -> None:
         """Let the next still-lying frame report again (the caller held the last report back)."""
@@ -128,13 +138,24 @@ class LyingStillDetector:
         if self._last_t is not None and sample.t - self._last_t > self.gap_reset_s:
             self._reset()
         self._last_t = sample.t
-        if sample.angle_deg <= self.upright_deg:
-            self._armed = True
-        if sample.angle_deg < self.down_deg:
-            self._reset()
-            return False
         a = self._anchor
-        if a is None or math.hypot(sample.cx - a.cx, sample.cy - a.cy) > self.max_motion:
+        moved = a is not None and math.hypot(sample.cx - a.cx, sample.cy - a.cy) > self.max_motion
+        up = sample.angle_deg < self.down_deg
+        bad = up or moved
+        self._recent.append((sample.t, bad, sample.angle_deg <= self.upright_deg))
+        if bad:
+            # One odd sample (a pose glitch) must not restart the clock: three bad ones among
+            # the last five, or two spanning about 1.5 s, end the episode.
+            times = [t for t, b, _ in self._recent if b]
+            if len(times) < BAD_SAMPLES_RESTART and times[-1] - times[0] < BAD_SPAN_RESTART_S:
+                return False
+            if any(u for _, b, u in self._recent if b):
+                self._armed = True  # really stood up: the next lying episode may report
+            self._reset()
+            if not up:  # lying again somewhere else
+                self._anchor = sample
+            return False
+        if a is None:
             self._anchor = sample
             return False
         if self._armed and sample.t - a.t >= self.min_still_s:
@@ -147,9 +168,14 @@ class PersonTracker:
     """True while at least min_hits of the last `of` inference frames saw a person."""
 
     def __init__(self, min_hits: int = TRACK_MIN_HITS, of: int = TRACK_OF) -> None:
+        if min_hits < 1 or of < 1 or min_hits > of:
+            raise ValueError(f"need 1 <= min_hits <= of, got {min_hits} of {of}")
         self.min_hits = min_hits
         self._hist: deque[bool] = deque(maxlen=of)
 
     def update(self, person_seen: bool) -> bool:
         self._hist.append(bool(person_seen))
         return sum(self._hist) >= self.min_hits
+
+    def reset(self) -> None:
+        self._hist.clear()

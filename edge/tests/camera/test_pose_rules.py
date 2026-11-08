@@ -1,5 +1,7 @@
 import math
 
+import pytest
+
 from ha_edge.camera.pose_rules import (
     FallDetector,
     Landmarks,
@@ -158,9 +160,9 @@ def test_lying_rearms_after_upright():
     det = LyingStillDetector()
     assert stream(det, lying(0, 130)).count(True) == 1
     assert not any(stream(det, lying(131, 200)))  # still the same episode
-    up = [sample(340, 5, 0.5)]
+    up = [sample(340 + i, 5, 0.5) for i in range(3)]  # standing for a few frames
     assert not any(stream(det, up))
-    assert stream(det, lying(341, 130)).count(True) == 1
+    assert stream(det, lying(343, 130)).count(True) == 1
 
 
 def test_person_tracker_blip_and_hold():
@@ -178,3 +180,72 @@ def test_lying_rearm_fires_again_on_next_frame():
     det.rearm()
     assert det.update(sample(132, 85, 0.8, 0.5, 0.8)) is True
     assert det.update(sample(133, 85, 0.8, 0.5, 0.8)) is False
+
+
+def test_fall_at_quarter_second_steps_fires_once_and_not_while_down():
+    det = FallDetector()
+    pts = [sample(0.0, 5, 0.5), sample(0.25, 45, 0.6), sample(0.5, 85, 0.8)]
+    pts += [sample(0.75 + 0.25 * i, 85, 0.8) for i in range(20)]
+    res = stream(det, pts)
+    assert res.index(True) == 2 and res.count(True) == 1
+
+
+def test_fall_ignores_samples_that_are_not_newer():
+    det = FallDetector()
+    assert det.update(sample(2.0, 5, 0.5)) is False
+    assert det.update(sample(1.5, 85, 0.8)) is False  # older: ignored, not a fall
+    assert det.update(sample(2.0, 85, 0.8)) is False  # same time: ignored
+    assert det.update(sample(2.25, 85, 0.8)) is True  # a real, newer sample still works
+
+
+def test_zero_length_torso_is_none():
+    p = (0.5, 0.5, 0.9)
+    assert torso_sample(Landmarks(p, p, p, p), 0.0) is None
+
+
+def test_lying_single_outlier_does_not_restart_the_clock():
+    for outlier in (sample(60, 85, 0.8, 0.9, 0.8), sample(60, 10, 0.5, 0.5, 0.8)):
+        det = LyingStillDetector()
+        pts = lying(0, 130)
+        pts[60] = outlier
+        res = stream(det, pts)
+        assert res.index(True) == 120
+
+
+def test_lying_three_bad_samples_restart_the_clock():
+    cases = [
+        (lambda t: sample(t, 85, 0.8, 0.9, 0.8), 0.9),  # moved to a new spot
+        (lambda t: sample(t, 10, 0.5, 0.5, 0.8), 0.5),  # stood up, then lay down again
+    ]
+    for bad, cx in cases:
+        det = LyingStillDetector()
+        pts = lying(0, 50) + [bad(51), bad(52), bad(53)] + lying(54, 140, cx=cx)
+        res = stream(det, pts)
+        assert res.count(True) == 1
+        assert pts[res.index(True)].t >= 53 + 119  # not at t = 120
+
+
+def test_lying_bad_samples_spanning_1_5s_restart_the_clock():
+    det = LyingStillDetector()
+    pts = lying(0, 50) + [sample(51, 10, 0.5), sample(52.5, 10, 0.5)] + lying(53.5, 140)
+    res = stream(det, pts)
+    assert pts[res.index(True)].t >= 53.5 + 119
+
+
+def test_lying_upright_outlier_does_not_rearm():
+    det = LyingStillDetector()
+    pts = lying(0, 130)
+    assert stream(det, pts).count(True) == 1
+    more = lying(131, 100)
+    more[10] = sample(141, 5, 0.5)  # one standing frame
+    assert not any(stream(det, more))
+
+
+def test_person_tracker_reset_and_validation():
+    tr = PersonTracker()
+    assert [tr.update(True) for _ in range(3)] == [False, False, True]
+    tr.reset()
+    assert [tr.update(True) for _ in range(3)] == [False, False, True]
+    for kw in ({"min_hits": 0}, {"of": 0}, {"min_hits": 6, "of": 5}, {"min_hits": -1}):
+        with pytest.raises(ValueError):
+            PersonTracker(**kw)
