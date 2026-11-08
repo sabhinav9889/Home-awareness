@@ -106,7 +106,8 @@ class Analyzer:
         if run_pose:
             res.pose_ran = True
             lm = self.pose.torso(frame.image)
-            sample = torso_sample(lm, t) if lm is not None else None
+            h, w = frame.image.shape[:2]
+            sample = torso_sample(lm, t, aspect=w / h) if lm is not None else None
             res.angle_deg = sample.angle_deg if sample is not None else None
             fell = self.fall.update(sample)
             lying = self.lying.update(sample, t=t)  # always pass t, also with no sample
@@ -130,7 +131,7 @@ class Analyzer:
             if want_person or force_models:
                 hit = person >= cfg.thresholds.get("person_away", DEFAULT_OBJECT_THRESHOLD)
                 present = self.tracker.update(hit)
-                if present and want_person:
+                if present and hit and want_person:  # a miss frame never starts a cooldown
                     res.would_send.append(("person_away", person))
             else:
                 self.tracker = PersonTracker()  # not watching for people: forget old hits
@@ -186,6 +187,7 @@ async def run_camera(
     queue = EventQueue(clock=clock)
     cfg: DeviceConfig | None = None  # None until the first successful heartbeat
     inflight: asyncio.Future | None = None  # the model call running in a worker thread
+    opening: asyncio.Future | None = None  # a camera open running in a worker thread
     last_sent: dict[str, float] = {}
     current: list[FrameSource] = []  # at most one open source (closed in `finally`)
     code = EXIT_OK
@@ -214,19 +216,11 @@ async def run_camera(
         raise _Stopped
 
     async def open_source() -> FrameSource:
-        fut = asyncio.ensure_future(asyncio.to_thread(factory))
-        try:
-            src = await asyncio.shield(fut)
-        except asyncio.CancelledError:
-            # opened while we were stopping: do not leak the camera
-            fut.add_done_callback(
-                lambda f: (
-                    _close(f.result(), "camera")
-                    if not f.cancelled() and not f.exception()
-                    else None
-                )
-            )
-            raise
+        nonlocal opening
+        fut = opening = asyncio.ensure_future(asyncio.to_thread(factory))
+        fut.add_done_callback(_consume)
+        src = await asyncio.shield(fut)  # if cancelled, the `finally` below closes the result
+        opening = None
         current.append(src)
         return src
 
@@ -410,6 +404,10 @@ async def run_camera(
         running = inflight is not None and not inflight.done()
         if running:
             await asyncio.wait({inflight}, timeout=STOP_WAIT_S)
+        if opening is not None:  # a camera opened while we were stopping: do not leak it
+            await asyncio.wait({opening}, timeout=STOP_WAIT_S)
+            if opening.done() and not opening.cancelled() and opening.exception() is None:
+                current.append(opening.result())
         for s in current:
             _close(s, "camera")
         current.clear()

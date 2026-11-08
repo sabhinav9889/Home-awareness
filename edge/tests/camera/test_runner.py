@@ -694,3 +694,77 @@ async def test_open_error_logged_once(mock, caplog):
         await run(ft, mock, factory, FakePose(), FakeObjects(), until=40)
     assert len(calls) >= 5
     assert sum("driver exploded" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_person_away_needs_a_hit_on_this_frame():
+    from ha_edge.api import DeviceConfig
+
+    class Scripted(FakeObjects):
+        def __init__(self, scores):
+            super().__init__()
+            self.scores = list(scores)
+
+        def detect(self, frame):
+            return [Detection("person", self.scores.pop(0))]
+
+    cfg = DeviceConfig(frozenset({"person_away"}), 60, {}, True, True)
+    a = runner.Analyzer(FakePose(), Scripted([0.9, 0.9, 0.9, 0.0, 0.1]))
+    frame = Frame(np.zeros((4, 4, 3), np.uint8), 0.0)
+    out = [a.analyze(frame, cfg, float(i)).would_send for i in range(5)]
+    assert out == [[], [], [("person_away", 0.9)], [], []]
+
+
+async def test_first_person_event_after_cooldown_is_a_real_detection(mock):
+    ft = FakeTime()
+    setup_server(mock, cfg_json(guarding=True, enabled=["person_away"], snapshots=False))
+
+    class Scripted(FakeObjects):
+        def detect(self, frame):
+            t = ft.t
+            hit = 100.0 <= t <= 402.0 and t != 400.5  # one miss frame right at cooldown expiry
+            return [Detection("person", 0.9 if hit else 0.0)]
+
+    await run(ft, mock, FakeSource(ft), FakePose(), Scripted(), until=405)
+    confs = [body(r)["confidence"] for r in events(mock)]
+    assert len(confs) == 2 and all(c >= 0.5 for c in confs)
+
+
+async def test_camera_opened_while_stopping_is_closed(mock):
+    import threading
+
+    ft = FakeTime()
+    setup_server(mock, cfg_json())
+    entered, gate = threading.Event(), threading.Event()
+    opened = []
+
+    def factory():
+        entered.set()
+        gate.wait(10)
+        s = FakeSource(ft)
+        opened.append(s)
+        return s
+
+    stop = asyncio.Event()
+    client = ServerClient(BASE, "key")
+    task = asyncio.create_task(
+        runner.run_camera(
+            client,
+            factory,
+            FakePose(),
+            FakeObjects(),
+            clock=ft.clock,
+            now=ft.now,
+            sleep=ft.sleep,
+            stop=stop,
+        )
+    )
+    for _ in range(400):
+        if entered.is_set():
+            break
+        await asyncio.sleep(0.005)
+    stop.set()
+    await asyncio.sleep(0.1)
+    gate.set()
+    assert await asyncio.wait_for(task, 5) == EXIT_OK
+    await client.aclose()
+    assert len(opened) == 1 and opened[0].closed == 1

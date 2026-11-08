@@ -16,7 +16,7 @@ import numpy as np
 from ha_edge.api import DeviceConfig
 from ha_edge.camera.capture import CameraBusy, FrameSource
 from ha_edge.camera.detectors import ObjectModel, PoseModel
-from ha_edge.camera.runner import Analyzer
+from ha_edge.camera.runner import DEFAULT_OBJECT_THRESHOLD, Analyzer
 
 DARK_LEVEL = 40.0  # mean pixel value (0-255) under which the picture is too dark
 MIN_BODY_SHARE = 0.2  # fraction of frames with a body below which we say so
@@ -104,7 +104,10 @@ def run_check(
         s.frames += 1
         brightness += float(np.mean(frame.image))
         s.body_frames += res.angle_deg is not None
-        s.person_frames += bool(res.person_score and res.person_score >= 0.5)
+        s.person_frames += bool(
+            res.person_score
+            and res.person_score >= cfg.thresholds.get("person_away", DEFAULT_OBJECT_THRESHOLD)
+        )
         for sound, _ in res.would_send:
             s.would_send[sound] = s.would_send.get(sound, 0) + 1
         out(_line(s.frames, res, cfg))
@@ -115,7 +118,8 @@ def run_check(
     sent = ", ".join(f"{k} x{v}" for k, v in sorted(s.would_send.items())) or "nothing"
     out(
         f"Summary: {s.frames} frames, body seen in {s.body_frames}, person seen in "
-        f"{s.person_frames}, brightness {s.brightness:.0f}/255. Would send: {sent}. "
+        f"{s.person_frames}, brightness {s.brightness:.0f}/255. "
+        f"Frames where it would send: {sent}. "
         "Nothing was sent."
     )
     out(s.advice)

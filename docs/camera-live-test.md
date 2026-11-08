@@ -84,13 +84,16 @@ continue.
 
 ## 6. Camera busy test
 
-With `run` going, open the camera in a browser tab (any "test webcam" page), allow it.
+On Linux the **second** program to open the camera is usually the one that is refused, so
+open the camera in a browser tab **first**: any "test webcam" page, allow it, keep it open.
 
-Expect, within a few seconds, **one** warning (not repeated every retry):
-`camera busy or unplugged: close any app using it (browser, video call) or plug it in;
-trying again every 5 s`. Close the tab. Expect `camera is back` within about 5 s and
-detection to resume. (If the browser took the camera first and `run` could not open it,
-the same warning appears.)
+Then start `ha-camera run`. Expect, within a few seconds, **one** warning (not repeated
+every retry): `camera busy or unplugged: close any app using it (browser, video call) or
+plug it in; trying again every 5 s`. Heartbeats keep going. Now close the browser tab.
+Expect `camera is back` within about 5 s and detection to resume.
+
+(If you start `run` first and then open the browser, the browser may be the one that is
+refused, and `run` keeps the camera: that is also fine, but it does not test the warning.)
 
 Optional: unplug a USB camera instead. Same warning; plug it in and `camera is back`.
 

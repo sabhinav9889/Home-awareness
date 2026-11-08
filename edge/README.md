@@ -252,6 +252,14 @@ Cameras in a bedroom or bathroom start with photos off.
 - **False alarms:** a TV, screen or poster showing people can count as a person; kitchen
   knives (and bats in a game) can trigger weapon seen, which is why it is off; sitting down
   fast or kids playing can look like a fall. Pets never trigger camera events.
+- **The object detector never reports below 0.4**, even if your household threshold for
+  person or weapon is lower.
+- **Weapon seen fires on any knife or bat in view**, not only ones being held.
+- **Someone lying along the camera's line of sight looks upright** to the pose model, so a
+  fall or lying-still in that direction is missed. The "low in the frame" idea from the
+  design is not implemented.
+- **Pair with a camera pairing code.** A code made for a sound sensor pairs fine, but that
+  household setting keeps no photos.
 - **No face recognition and no identity**, ever.
 - **Accuracy has not been measured on real people yet.** Treat it as a helper, not a guard.
 

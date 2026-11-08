@@ -374,8 +374,9 @@ class EventQueue:
             if e.status not in IMAGE_REFUSAL_STATUSES:
                 raise  # not about the image: the usual path (dropped and logged by drain)
             item.snapshot = None  # refused: never offered again, so no duplicate delivery
-            self._log_image_refused(item.sound, e)
             await client.send_event(item.sound, item.confidence, item.occurred_at)
+            # Only now is it proven that the image was the problem.
+            self._log_image_refused(item.sound, e)
         except ServerUnavailable:  # a 429 or a 5xx-free outcome says nothing about the image
             item.failures += 1
             if item.failures >= MAX_IMAGE_SEND_FAILURES:

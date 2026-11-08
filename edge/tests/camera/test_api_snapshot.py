@@ -360,3 +360,15 @@ async def test_put_clearing_head_snapshot_during_send_is_harmless():
     assert await q.drain(c, NOW) == 6
     assert c.calls[0] == ("head", JPEG) and c.calls[1] == ("head", None)
     assert len(q) == 0
+
+
+async def test_image_refusal_warning_only_when_the_retry_without_image_succeeds(caplog):
+    q = _q()
+    q.put("fall", 0.9, NOW, JPEG)
+    await q.drain(FakeClient([Rejected("big", 413), None]), NOW)
+    assert "refused the snapshot" in caplog.text
+    caplog.clear()
+    q.put("fall", 0.9, NOW, JPEG)
+    await q.drain(FakeClient([Rejected("a", 422), Rejected("b", 422)]), NOW)
+    assert "refused the snapshot" not in caplog.text
+    assert "rejected a fall event" in caplog.text

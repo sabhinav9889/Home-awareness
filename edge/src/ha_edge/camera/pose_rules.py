@@ -42,8 +42,10 @@ class TorsoSample:
 
 
 def torso_sample(
-    lm: Landmarks, t: float, *, min_visibility: float = MIN_VISIBILITY
+    lm: Landmarks, t: float, *, min_visibility: float = MIN_VISIBILITY, aspect: float = 1.0
 ) -> TorsoSample | None:
+    """``aspect`` is frame width / height: landmark x is a fraction of the width and y a
+    fraction of the height, so dx must be scaled by it before measuring the angle."""
     pts = (lm.left_shoulder, lm.right_shoulder, lm.left_hip, lm.right_hip)
     if any(p[2] < min_visibility for p in pts):
         return None
@@ -54,7 +56,7 @@ def torso_sample(
     dx, dy = hx - sx, hy - sy
     if dx == 0 and dy == 0:
         return None
-    angle = math.degrees(math.atan2(abs(dx), abs(dy)))
+    angle = math.degrees(math.atan2(abs(dx) * aspect, abs(dy)))
     return TorsoSample(t=t, angle_deg=angle, hip_y=hy, cx=(sx + hx) / 2, cy=(sy + hy) / 2)
 
 

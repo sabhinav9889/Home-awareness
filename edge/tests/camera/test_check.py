@@ -321,3 +321,14 @@ def test_load_models_real(monkeypatch, tmp_path):
     finally:
         pose.close()
         objs.close()
+
+
+def test_check_person_count_uses_the_config_threshold():
+    from ha_edge.api import DeviceConfig
+
+    dc = DeviceConfig(frozenset({"person_away"}), 60, {"person_away": 0.8}, True, True)
+    s, lines = go(Src(), Pose(UP), Objs([Detection("person", 0.7)]), cfg=dc)
+    assert s.person_frames == 0
+    s, lines = go(Src(), Pose(UP), Objs([Detection("person", 0.85)]), cfg=dc)
+    assert s.person_frames == s.frames
+    assert "frames where it would send" in lines[-2].lower()

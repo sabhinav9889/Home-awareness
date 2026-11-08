@@ -249,3 +249,25 @@ def test_person_tracker_reset_and_validation():
     for kw in ({"min_hits": 0}, {"of": 0}, {"min_hits": 6, "of": 5}, {"min_hits": -1}):
         with pytest.raises(ValueError):
             PersonTracker(**kw)
+
+
+def _px_landmarks(w, h, angle_deg, length_px=300.0):
+    """A torso of `length_px` pixels at a true angle, as MediaPipe reports it (x/w, y/h)."""
+    a = math.radians(angle_deg)
+    dx, dy = math.sin(a) * length_px, math.cos(a) * length_px
+    cx, cy = w / 2, h / 2
+    pt = lambda x, y: (x / w, y / h, 0.9)
+    return Landmarks(
+        pt(cx - dx / 2 - 20, cy - dy / 2),
+        pt(cx - dx / 2 + 20, cy - dy / 2),
+        pt(cx + dx / 2 - 20, cy + dy / 2),
+        pt(cx + dx / 2 + 20, cy + dy / 2),
+    )
+
+
+def test_torso_angle_uses_the_frame_aspect_ratio():
+    for w, h, true in ((1280, 720, 45.0), (640, 480, 70.0), (1280, 720, 20.0)):
+        lm = _px_landmarks(w, h, true)
+        assert torso_sample(lm, 0.0, aspect=w / h).angle_deg == pytest.approx(true, abs=1.0)
+    # the raw fractions are wrong at 16:9 (this is what aspect=1 gives)
+    assert torso_sample(_px_landmarks(1280, 720, 45.0), 0.0).angle_deg < 35

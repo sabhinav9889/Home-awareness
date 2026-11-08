@@ -93,7 +93,8 @@ def test_cameras_command_none_found(monkeypatch, capsys):
 
 
 @respx.mock
-def test_pair_saves_camera_json_and_never_prints_key(cfgdir, capsys, caplog):
+def test_pair_saves_camera_json_and_never_prints_key(cfgdir, capsys, caplog, monkeypatch):
+    monkeypatch.setattr(devices, "list_cameras", list)
     caplog.set_level(logging.DEBUG)
     respx.post("http://srv/device/pair").mock(
         return_value=httpx.Response(201, json={"device_id": 9, "device_key": KEY})
@@ -219,3 +220,61 @@ def test_fetch_model_command_integrity_failure_exit_1(
     respx.get(models.POSE_URL).mock(return_value=httpx.Response(200, content=b"bad"))
     assert camera_cli.main(["fetch-model"]) == 1
     assert "Cannot download" in capsys.readouterr().err
+
+
+CAMS = [
+    devices.CameraInfo(0, "Integrated Camera: Integrated C", "/dev/video0"),
+    devices.CameraInfo(2, "Logitech BRIO", "/dev/video2"),
+]
+
+
+def _pair(monkeypatch, cams, *flag):
+    monkeypatch.setattr(devices, "list_cameras", lambda: cams)
+    route = respx.post("http://srv/device/pair").mock(
+        return_value=httpx.Response(201, json={"device_id": 9, "device_key": KEY})
+    )
+    argv = ["pair", "--server", "http://srv", "--code", "ABC123", *flag]
+    return camera_cli.main(argv), route
+
+
+@respx.mock
+def test_pair_saves_the_resolved_full_name_and_index(cfgdir, monkeypatch):
+    code, _ = _pair(monkeypatch, CAMS, "--camera", "Integrated")  # the README example
+    assert code == 0
+    cfg = config.load_camera()
+    assert (cfg.camera_name, cfg.camera_index) == ("Integrated Camera: Integrated C", 0)
+    # and run/check can then find it by the saved name
+    assert camera_cli._pick_camera(None, cfg) == CAMS[0]
+
+
+@respx.mock
+def test_pair_substring_is_case_insensitive_and_exact_wins(cfgdir, monkeypatch):
+    code, _ = _pair(monkeypatch, CAMS, "--camera", "brio")
+    assert code == 0 and config.load_camera().camera_name == "Logitech BRIO"
+    cams = [*CAMS, devices.CameraInfo(4, "Logitech BRIO 4K", "/dev/video4")]
+    code, _ = _pair(monkeypatch, cams, "--camera", "Logitech BRIO")
+    assert code == 0 and config.load_camera().camera_index == 2
+
+
+@respx.mock
+def test_pair_ambiguous_name_exits_1_lists_cameras_saves_nothing(cfgdir, monkeypatch, capsys):
+    code, route = _pair(monkeypatch, CAMS, "--camera", "i")
+    err = capsys.readouterr().err
+    assert code == 1 and "more than one" in err and "Logitech BRIO" in err
+    assert not (cfgdir / "camera.json").exists() and not route.called
+
+
+@respx.mock
+def test_pair_unknown_name_exits_1_lists_cameras_saves_nothing(cfgdir, monkeypatch, capsys):
+    code, route = _pair(monkeypatch, CAMS, "--camera", "nope")
+    err = capsys.readouterr().err
+    assert code == 1 and "not found" in err and "Integrated Camera" in err
+    assert not (cfgdir / "camera.json").exists() and not route.called
+
+
+@respx.mock
+def test_pair_without_any_cameras_saves_name_as_typed(cfgdir, monkeypatch):
+    code, _ = _pair(monkeypatch, [], "--camera", "Integrated")
+    assert code == 0
+    cfg = config.load_camera()
+    assert (cfg.camera_name, cfg.camera_index) == ("Integrated", None)

@@ -26,8 +26,30 @@ NOTICE = (
 )
 
 
+def _match_camera(cams, wanted: str):
+    """Cameras matching ``wanted``: an exact name first, else a case-insensitive substring."""
+    exact = [c for c in cams if c.name == wanted]
+    return exact or [c for c in cams if wanted.lower() in c.name.lower()]
+
+
 def _cmd_pair(args: argparse.Namespace) -> int:
     from ha_edge import api, config
+    from ha_edge.camera import devices
+
+    chosen = None
+    if args.camera is not None:
+        # Resolve before using up the (single-use) pairing code; save the full name.
+        cams = devices.list_cameras()
+        if cams:
+            matches = _match_camera(cams, args.camera)
+            if len(matches) != 1:
+                why = "matches more than one camera" if matches else "not found"
+                _err(
+                    f"Camera {args.camera!r} {why}. Available: "
+                    f"{', '.join(c.name for c in cams)}. Use `--camera NAME` to choose one."
+                )
+                return EXIT_ERROR
+            chosen = matches[0]
 
     async def pair() -> tuple[int, str]:
         client = api.ServerClient(args.server)
@@ -56,16 +78,13 @@ def _cmd_pair(args: argparse.Namespace) -> int:
     except api.ApiError as e:
         _err(f"Pairing failed: cannot reach the server at {args.server} ({e}).")
         return EXIT_ERROR
-    name = args.camera
-    index = None
-    with contextlib.suppress(config.ConfigError):
-        old = config.load_camera()
-        if old is not None:
-            index = old.camera_index
-            if name is None:
-                name = old.camera_name
-            elif name != old.camera_name:
-                index = None  # a different camera was asked for: forget the old node
+    name = chosen.name if chosen is not None else args.camera
+    index = chosen.index if chosen is not None else None
+    if args.camera is None:
+        with contextlib.suppress(config.ConfigError):
+            old = config.load_camera()
+            if old is not None:
+                name, index = old.camera_name, old.camera_index
     config.save_camera(config.CameraConfig(args.server, device_id, key, name, index))
     print(f"Paired as device {device_id}.")
     print(NOTICE)
@@ -119,8 +138,7 @@ def _pick_camera(flag: str | None, cfg):
     if flag is None:
         matches = [c for c in cams if c.name == wanted]  # the pinned name must match exactly
     else:
-        exact = [c for c in cams if c.name == wanted]
-        matches = exact or [c for c in cams if wanted.lower() in c.name.lower()]
+        matches = _match_camera(cams, wanted)
     if len(matches) == 1:
         return matches[0]
     found = ", ".join(c.name for c in cams) or "none"
