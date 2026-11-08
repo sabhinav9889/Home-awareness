@@ -71,3 +71,42 @@ def test_nothing_written_to_disk(monkeypatch):
     monkeypatch.setattr(cv2, "imwrite", boom)
     out = encode_snapshot(Frame(_gradient(1920, 1080), 1.0), now=1.0)
     assert out is not None
+
+
+def _valid_or_none(out):
+    assert out is None or (out[:2] == b"\xff\xd8" and out[-2:] == b"\xff\xd9")
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        np.zeros((1, 20000, 3), np.uint8),
+        np.zeros((20000, 1, 3), np.uint8),
+        np.zeros((0, 0, 3), np.uint8),
+        np.zeros((0,), np.uint8),
+        np.zeros((240, 320), np.uint8),
+        np.zeros((240, 320, 1), np.uint8),
+        np.zeros((240, 320, 4), np.uint8),
+        _gradient(640, 480)[::2, ::2],
+        _gradient(640, 480)[:, ::-1],
+    ],
+    ids=["wide", "tall", "empty3d", "empty1d", "gray2d", "h-w-1", "bgra", "slice", "reversed"],
+)
+def test_degenerate_inputs_are_total(image):
+    out = encode_snapshot(Frame(image, 1.0), now=1.0)
+    _valid_or_none(out)
+    if image.size and image.ndim >= 2:
+        assert out is not None
+
+
+def test_max_side_zero_returns_none():
+    assert encode_snapshot(Frame(_gradient(64, 64), 1.0), now=1.0, max_side=0) is None
+
+
+def test_lowered_quality_result_has_eoi():
+    rng = np.random.default_rng(2)
+    noise = rng.integers(0, 256, (360, 640, 3), dtype=np.uint8)
+    full = encode_snapshot(Frame(noise, 1.0), now=1.0, max_bytes=10**9)
+    out = encode_snapshot(Frame(noise, 1.0), now=1.0, max_bytes=len(full) - 1)
+    assert out is not None and len(out) < len(full)
+    assert out[:2] == b"\xff\xd8" and out[-2:] == b"\xff\xd9"
