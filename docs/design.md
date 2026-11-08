@@ -108,6 +108,8 @@ Reliability labels are estimates, not measured. An early task must measure each 
 - No raw audio is sent or stored. Nothing is recorded to disk.
 - Camera and video are out of v1. If added later, the same rule applies: analyse locally, send events only.
 
+> **Update 2026-11-09:** cameras are now supported, and the promise that audio and video never leave the device has one exception: a camera alert may carry a **single JPEG snapshot** (at most 640 px and 300 KB, only when the alert is raised and the camera's "Send snapshots" switch is on). The server stores it encrypted at rest, shows it only to household members, and deletes it after the household's retention setting (1, 7 or 30 days). Video is never sent. See [the camera spec](superpowers/specs/2026-11-08-camera-sensors-design.md) §2.
+
 ## 9. Product and multi-tenancy
 
 - **Sign-up and households:** a person signs up with email and password and creates a household, or joins one through an invite link from an existing member. A household has an owner and members.

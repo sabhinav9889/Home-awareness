@@ -2,8 +2,9 @@
 
 Home-awareness tool. Not a medical device, security alarm, or emergency service.
 
-Edge client for Home Awareness: `ha-sensor` turns a laptop into a sound sensor, `ha-agent`
-shows alerts and plays an alarm. Run every command below from this `edge/` directory.
+Edge client for Home Awareness: `ha-sensor` turns a laptop into a sound sensor, `ha-camera`
+turns a camera into a sensor ([see below](#camera-sensor-ha-camera)), `ha-agent` shows alerts
+and plays an alarm. Run every command below from this `edge/` directory.
 
 ## Requirements
 
@@ -103,6 +104,176 @@ paired, 4 microphone not found or lost, 5 this sensor was removed from the house
 again).
 
 Accuracy measurements per sound: see [docs/accuracy.md](../docs/accuracy.md) (harness: `scripts/eval_accuracy.py`).
+
+## Camera sensor (`ha-camera`)
+
+`ha-camera` watches a laptop webcam or USB camera on Linux and reports a short event when
+it sees something worth an alert. The pictures are analysed on this computer by two small
+models (MediaPipe pose and object detection); frames are never saved or sent. The only
+picture that ever leaves is **one still photo with an alert**, and only if the camera's
+"Send snapshots" switch is on. Step-by-step first test: [docs/camera-live-test.md](../docs/camera-live-test.md).
+
+> Not a medical device, security alarm, or emergency service. Accuracy has **not** been
+> measured on real people yet: expect misses and false alarms.
+
+No camera handy? `scripts/fake_camera.py` (from the repository root) pairs with a camera
+pairing code and sends a fall, lying-still, person or weapon event with a JPEG, so you can
+try camera alerts, photos and incidents without a camera (see the script's header).
+
+### Quick start
+
+1. Install with the camera extra (adds OpenCV and MediaPipe):
+
+       cd edge && uv sync --extra camera
+
+2. Download and verify the two models (once; pinned SHA-256):
+
+       uv run ha-camera fetch-model
+
+   It prints the two file paths. If it prints "Cannot download the camera models: ...",
+   check your internet connection and run it again; a file that fails its checksum is
+   refused.
+3. In the dashboard open **Sensors → Add a camera**, pick the **room**, and tick
+   **"Everyone who may be on this camera knows about it"** (both are required), then press
+   "Create camera pairing code". The code works once and is valid for 10 minutes.
+4. Pair this computer (the device key is stored in `camera.json`, mode 0600, and is never
+   printed):
+
+       uv run ha-camera pair --server https://example.org --code ABCD1234
+       uv run ha-camera pair --server https://example.org --code ABCD1234 --camera "Integrated"
+
+   `--camera` is a camera name or a unique part of it; it is saved for later.
+5. See which cameras there are (this lists them without opening them, so it never turns a
+   camera light on):
+
+       uv run ha-camera cameras
+
+6. Look at what the camera sees, with nothing sent (next section), then start it:
+
+       uv run ha-camera run                  # the saved camera, or the only one
+       uv run ha-camera run --camera "USB"   # a name, or a unique part; saved for next time
+
+   Ctrl-C (or SIGTERM) stops it cleanly with exit code 0. If there is more than one camera
+   and none is saved, it asks you to choose with `--camera NAME`.
+
+### `ha-camera check`: what does it see?
+
+    uv run ha-camera check                    # 15 s on the saved (or only) camera
+    uv run ha-camera check --seconds 30 --camera "USB"   # another camera; not saved
+
+It uses the household's real settings from the server when paired (or says it is using
+defaults if the server cannot be reached), looks for `--seconds`, and prints one line about
+four times a second, for example:
+
+    #12   torso 8 deg    person 0.91  guarding yes would send: person_away
+
+- `torso 8 deg` / `no body`: the angle of your torso from vertical (0 upright, 90 lying
+  flat), or `no body` when the shoulders **and** hips were not both clearly visible.
+- `person 0.91`: how sure the object model is that a person is in view (`person -` means
+  it was not run).
+- `guarding yes/no`: whether the household is Away or in night hours (see below).
+- `would send: ...`: the events that frame would raise. `check` never sends anything.
+
+It ends with a summary (frames, how many had a body and a person, average brightness out of
+255, what would have been sent) and one line of advice:
+
+- "The picture is too dark..." (average brightness under 40): turn on a light.
+- "No body was visible for most of the check..." (a body in fewer than 1 frame in 5): move
+  back so the camera sees your head to your hips.
+- "No pictures came from the camera: it is probably busy or unplugged..." : close the app
+  or browser tab using it.
+- "The camera sees you well enough."
+
+### What `ha-camera run` does
+
+It opens the camera, analyses about 4 frames a second, and sends events with the device
+key. On the first start it prints the camera name and a notice that it is watching. It
+logs what it does ("enabled: ...", "detected person_away (0.91) with snapshot", "sent 1
+event(s)").
+
+- **Nothing is detected until the first heartbeat succeeds** (log: "waiting for the server;
+  detection starts when it answers"); it retries every 5 s.
+- **It re-reads the household's camera settings from the server about every 15 s**
+  (enabled events, thresholds, Away mode, the "Send snapshots" switch) and on every
+  heartbeat, so a change in the dashboard reaches a running camera within about 15 s.
+  Models for events nobody enabled are not run.
+- **Cooldowns on the device** so one episode does not flood the household: a fall 2 min,
+  lying still 10 min, person while guarding 5 min, weapon seen 5 min. The server applies
+  its own rules, cooldowns and incidents on top.
+- If the server is unreachable, events wait in a small queue and go out when it answers.
+- If the camera is removed in the dashboard, `run` logs "This camera was removed. Pair it
+  again with `ha-camera pair --server URL --code CODE`." and exits with code 5.
+
+### Away mode ("Person while guarding")
+
+"Person while guarding" (`person_away`) fires only while the household is **guarding**:
+Away mode is on (the **Away** button on the dashboard Overview, any member can press it) or
+the time is inside the household's night hours (set by the owner under Household →
+Cameras). Person detection is not even run while the house is not guarding. After you
+switch Away on, the camera notices within about 15 s (its next settings refresh; sometimes
+the heartbeat brings it sooner), so wait about 20 s before walking into view. Falls and
+lying-still do not need Away: they are always on when enabled.
+
+### Photos
+
+When an alert is raised and the camera's **"Send snapshots with alerts"** switch (Sensors
+page; owner-only) is on, the alert carries one JPEG: at most 640 px on the longest side and
+300 KB, made in memory from the frame that triggered the alert, never written to this
+computer's disk. A frame more than 1 s old is not sent. The server stores it encrypted,
+shows it only to household members, and deletes it after the household's retention setting
+(1, 7 or 30 days; default 7; set by the owner under Household → Cameras). With the switch
+off, camera alerts carry no photo (a queued photo is dropped when the switch is turned off).
+Cameras in a bedroom or bathroom start with photos off.
+
+### What each detection needs
+
+| Event (dashboard name) | Needs | Default |
+|---|---|---|
+| Fall (`fall`) | Whole upper body (both shoulders and both hips) in view, **and room around it to see the torso go from upright to horizontal within about 1 s**; decent light | on |
+| Lying still (`lying_still`) | Shoulders and hips in view while lying (so the floor must be in view), torso flat and almost motionless for about 2 minutes | on |
+| Person while guarding (`person_away`) | A person visible for 3 of the last 5 analysed frames, light, and the house guarding | on |
+| Weapon seen (`weapon_seen`) | A "knife" or "baseball bat" label from the object model; **experimental** | **off** |
+
+- **Light matters.** Most webcams are poor in the dark; with a dark picture nothing works.
+- **A laptop webcam usually sees only your head and shoulders.** Falls and lying-still
+  need the shoulders **and** hips, so a laptop on a desk will mostly say "no body". Use a
+  camera with a wider view that includes the floor (a USB camera on a shelf or a wall,
+  angled down).
+- **When the body is not visible the program stays silent by design** (fall and
+  lying-still never fire on a guess). Run `ha-camera check` to see what your camera sees.
+
+### Honest limits
+
+- **"Suspicious" here means exactly four things:** a person while the house is guarding, a
+  fall, lying still for about 2 minutes, and a weapon label (off by default, experimental).
+  **Stealing and smashing cannot be detected from video.** They only show up through the
+  server's combined incidents, for example "Possible break-in" (a breaking-glass sound plus
+  a person or a camera person event) or "Property damage".
+- **False alarms:** a TV, screen or poster showing people can count as a person; kitchen
+  knives (and bats in a game) can trigger weapon seen, which is why it is off; sitting down
+  fast or kids playing can look like a fall. Pets never trigger camera events.
+- **No face recognition and no identity**, ever.
+- **Accuracy has not been measured on real people yet.** Treat it as a helper, not a guard.
+
+### Troubleshooting
+
+- **"camera busy or unplugged: close any app using it (browser, video call) or plug it
+  in; trying again every 5 s"**: another program (a browser tab, a video call) has the
+  camera, or it was unplugged. Close the other program or plug it in; `run` reconnects by
+  itself and logs "camera is back". It logs the warning once, not every retry.
+- **"Camera 'X' not found" / "matches more than one camera"**: run `ha-camera cameras` and
+  pass a more exact `--camera NAME`.
+- **"This camera was removed. Pair it again..."**: someone removed this camera in the
+  dashboard. Create a new camera pairing code and run `ha-camera pair` again.
+- **"The camera models are missing. Run `ha-camera fetch-model` first."** or **"Cannot
+  download the camera models: ..."**: connect to the internet and run `fetch-model`.
+- **"The camera extra is not installed. Run `uv sync --extra camera`."**
+- **"Not paired. Run `ha-camera pair --server URL --code CODE` first."**
+- **"Pairing failed: ... Create a new pairing code and try again."**: the code expired or
+  was used; "answered 404 Not Found" means the `--server` address is wrong.
+
+`ha-camera` exit codes: 0 stopped normally, 1 network, model or camera error, 2 usage error,
+unusable config, pairing refused or rate limited, 3 not paired, 5 this camera was removed.
 
 ## Alert agent (`ha-agent`)
 

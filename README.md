@@ -60,6 +60,10 @@ The screenshots show a made-up demo household. Regenerate them with `uv run pyth
 
 [`edge/`](edge/README.md) is a separate Python package with two commands for Linux laptops (PipeWire): `ha-sensor` turns a laptop into a sound sensor (pair it with a code from `POST /devices/pairing-codes`; it runs YAMNet locally and sends only the sound type, a confidence and a time), and `ha-agent` shows your alerts as desktop popups and plays an alarm through your headphones. Setup, exit codes and caveats: [edge/README.md](edge/README.md). Per-sound accuracy measurements: [docs/accuracy.md](docs/accuracy.md).
 
+## Camera sensor
+
+`ha-camera` (in [`edge/`](edge/README.md#camera-sensor-ha-camera)) turns a Linux laptop webcam or USB camera into a sensor for falls, lying still and a person while the house is Away or at night. Video is analysed on the device and never leaves it. Cameras send a single snapshot only when they raise an alert, if the camera's "Send snapshots" switch is on (see [Camera snapshots](#camera-snapshots-optional)). Usage and honest limits: [edge/README.md](edge/README.md#camera-sensor-ha-camera); a morning test checklist: [docs/camera-live-test.md](docs/camera-live-test.md); try camera alerts without a camera with `scripts/fake_camera.py`; design: [camera spec](docs/superpowers/specs/2026-11-08-camera-sensors-design.md).
+
 ## Telegram bot (optional)
 
 1. In Telegram, message [@BotFather](https://t.me/BotFather), send `/newbot`, and follow the prompts. Copy the bot token and the bot username.
