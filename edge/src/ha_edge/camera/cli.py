@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import signal
 from collections.abc import Sequence
 
 from ha_edge.cli import (
@@ -13,7 +14,11 @@ from ha_edge.cli import (
     EXIT_USAGE,
     _err,
     _parser,
+    _positive_seconds,
+    _setup_logging,
 )
+
+EXIT_NOT_PAIRED = 3
 
 NOTICE = (
     "This camera is watching: frames are analysed on this computer and never saved or sent; "
@@ -96,6 +101,188 @@ def _cmd_fetch_model(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+WATCHING = "Watching — video is analysed on this computer; only a snapshot goes with an alert."
+
+
+def _pick_camera(flag: str | None, cfg):
+    """(CameraInfo, name) of the camera to use, or an exit code after printing why."""
+    from ha_edge.camera import devices
+
+    cams = devices.list_cameras()
+    wanted = flag if flag is not None else cfg.camera_name
+    if wanted is None:
+        if len(cams) == 1:
+            return cams[0]
+        found = ", ".join(c.name for c in cams) or "none"
+        _err(f"Which camera? Found: {found}. Use `--camera NAME` (see `ha-camera cameras`).")
+        return EXIT_USAGE
+    if flag is None:
+        matches = [c for c in cams if c.name == wanted]  # the pinned name must match exactly
+    else:
+        exact = [c for c in cams if c.name == wanted]
+        matches = exact or [c for c in cams if wanted.lower() in c.name.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    found = ", ".join(c.name for c in cams) or "none"
+    why = "matches more than one camera" if matches else "not found"
+    _err(f"Camera {wanted!r} {why}. Available: {found}. Use `--camera NAME` to choose one.")
+    return EXIT_USAGE if matches else EXIT_ERROR
+
+
+def _load_models():
+    """(pose, objects) from the model dir; an exit code after printing why."""
+    from ha_edge.camera import models
+
+    d = models.default_model_dir()
+    if not (d / models.POSE_FILE).is_file() or not (d / models.OBJECT_FILE).is_file():
+        _err("The camera models are missing. Run `ha-camera fetch-model` first.")
+        return EXIT_ERROR
+    try:
+        pose = models.MediapipePose(d / models.POSE_FILE)
+        try:
+            return pose, models.MediapipeObjects(d / models.OBJECT_FILE)
+        except BaseException:
+            pose.close()
+            raise
+    except ImportError:
+        _err("The camera extra is not installed. Run `uv sync --extra camera`.")
+    except (OSError, ValueError, RuntimeError) as e:
+        _err(f"Cannot load the camera models: {e}")
+    return EXIT_ERROR
+
+
+def _open_camera(index: int):
+    from ha_edge.camera.capture import CameraSource
+
+    return CameraSource(index)
+
+
+def _load_paired(command: str):
+    from ha_edge import config
+
+    try:
+        cfg = config.load_camera()
+    except config.ConfigError as e:
+        _err(str(e))
+        return EXIT_USAGE
+    if cfg is None:
+        _err("Not paired. Run `ha-camera pair --server URL --code CODE` first.")
+        return EXIT_NOT_PAIRED
+    return cfg
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    from ha_edge import api, config
+    from ha_edge.camera import runner
+
+    cfg = _load_paired("run")
+    if isinstance(cfg, int):
+        return cfg
+    cam = _pick_camera(args.camera, cfg)
+    if isinstance(cam, int):
+        return cam
+    if (cfg.camera_name, cfg.camera_index) != (cam.name, cam.index):
+        cfg.camera_name, cfg.camera_index = cam.name, cam.index
+        config.save_camera(cfg)
+    loaded = _load_models()
+    if isinstance(loaded, int):
+        return loaded
+    pose, objects = loaded
+    _setup_logging()
+    print(f"Camera: {cam.name}")
+    print(WATCHING, flush=True)
+
+    async def main() -> int:
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with contextlib.suppress(NotImplementedError, RuntimeError):
+                loop.add_signal_handler(sig, stop.set)
+        client = api.ServerClient(cfg.base_url, cfg.device_key)
+        try:
+            return await runner.run_camera(
+                client, lambda: _open_camera(cam.index), pose, objects, stop=stop
+            )
+        finally:
+            await client.aclose()
+
+    return asyncio.run(main())
+
+
+def _check_config(cfg):
+    """The household's config (thresholds, enabled events, guarding), or None."""
+    from ha_edge import api
+
+    if cfg is None:
+        print("Not paired: using defaults (every event on, guarding assumed on).")
+        return None
+
+    async def fetch():
+        client = api.ServerClient(cfg.base_url, cfg.device_key)
+        try:
+            return await client.config()
+        finally:
+            await client.aclose()
+
+    try:
+        dc = asyncio.run(fetch())
+    except api.ApiError as e:
+        print(
+            f"Cannot reach {cfg.base_url} ({e}): using defaults (every event on, guarding assumed on)."
+        )
+        return None
+    print(f"Using your household's settings from {cfg.base_url}.")
+    return dc
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    from ha_edge import config
+    from ha_edge.camera import check
+    from ha_edge.camera.capture import CameraBusy
+
+    try:
+        cfg = config.load_camera()
+    except config.ConfigError as e:
+        _err(str(e))
+        return EXIT_USAGE
+    if cfg is None:
+        cam = _pick_camera(args.camera, config.CameraConfig("", 0, ""))
+    else:
+        cam = _pick_camera(args.camera, cfg)
+    if isinstance(cam, int):
+        return cam
+    dc = _check_config(cfg)
+    loaded = _load_models()
+    if isinstance(loaded, int):
+        return loaded
+    pose, objects = loaded
+    try:
+        try:
+            source = _open_camera(cam.index)
+        except CameraBusy:
+            print(f"Camera {cam.name}: {check.advice(check.CheckSummary())}")
+            return EXIT_ERROR
+        print(
+            f"Looking through: {cam.name} for {args.seconds:g} s. Nothing is recorded or sent.",
+            flush=True,
+        )
+        try:
+            check.run_check(
+                source,
+                pose,
+                objects,
+                cfg=dc,
+                seconds=args.seconds,
+                out=lambda line: print(line, flush=True),
+            )
+        finally:
+            source.close()
+    finally:
+        pose.close()
+        objects.close()
+    return EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser("ha-camera", "Turn a camera into a Home Awareness sensor.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -105,8 +292,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("--camera", help="camera name (or unique part of it); saved for next time")
     sub.add_parser("cameras", help="list cameras (without opening them)")
     sub.add_parser("fetch-model", help="download and verify the pose and object models")
+    r = sub.add_parser("run", help="watch the camera and send alerts")
+    r.add_argument("--camera", help="camera name (or unique part of it); saved for next time")
+    c = sub.add_parser("check", help="show what the camera sees and would send; sends nothing")
+    c.add_argument(
+        "--seconds", type=_positive_seconds, default=15.0, help="how long to look (default 15)"
+    )
+    c.add_argument("--camera", help="camera name (default: the saved one); not saved")
     args = parser.parse_args(argv)
-    commands = {"pair": _cmd_pair, "cameras": _cmd_cameras, "fetch-model": _cmd_fetch_model}
+    commands = {
+        "pair": _cmd_pair,
+        "cameras": _cmd_cameras,
+        "fetch-model": _cmd_fetch_model,
+        "run": _cmd_run,
+        "check": _cmd_check,
+    }
     try:
         return commands[args.command](args)
     except KeyboardInterrupt:
