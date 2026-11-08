@@ -49,6 +49,7 @@ class _Closable:
         try:
             self.close()
         except Exception:  # noqa: BLE001, S110 - interpreter shutdown: nothing useful to do
+            pass
 
 
 class MediapipePose(_Closable):

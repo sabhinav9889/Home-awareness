@@ -24,6 +24,8 @@ DEFAULT_RETRY_AFTER_S = 1.0
 MAX_QUEUE_ITEMS = 500
 MAX_QUEUED_IMAGES = 5  # snapshots held in memory at once; the oldest lose theirs first
 MAX_IMAGE_SEND_FAILURES = 3  # failed sends after which an event goes without its image
+# 4xx statuses that can be about the image (bad request, no length, too big, type, invalid)
+IMAGE_REFUSAL_STATUSES = frozenset({400, 411, 413, 415, 422})
 MAX_IMAGE_AGE_S = 60.0  # an event older than this goes without its image
 REJECT_LOG_EVERY_S = 600.0  # the same rejection reason is logged at most every 10 minutes
 SKEW_TEXT = "10 minutes"  # the server's occurred_at skew check (app/events/schemas.py)
@@ -260,8 +262,9 @@ class _Pending:
     sound: str
     confidence: float
     occurred_at: datetime
-    snapshot: bytes | None = None  # memory only, never logged
-    failures: int = 0  # failed sends that carried the snapshot
+    # memory only; out of repr and equality so the bytes can never reach a log line
+    snapshot: bytes | None = field(default=None, repr=False, compare=False)
+    failures: int = field(default=0, compare=False)  # failed sends that carried the snapshot
 
 
 class EventQueue:
@@ -307,6 +310,22 @@ class EventQueue:
         else:
             log.warning("%s", text)
 
+    def _log_image_refused(self, sound: str, err: Rejected) -> None:
+        """The server refused the snapshot (status only, never the bytes); rate-limited."""
+        reason = f"image-{err.status}"
+        now = self._clock()
+        last = self._reject_logged.get(reason)
+        if last is not None and now - last < REJECT_LOG_EVERY_S:
+            return
+        if len(self._reject_logged) >= 100:
+            self._reject_logged.clear()
+        self._reject_logged[reason] = now
+        log.warning(
+            "server refused the snapshot of a %s event (HTTP %s); sending it without",
+            sound,
+            err.status,
+        )
+
     def __len__(self) -> int:
         return len(self._items)
 
@@ -346,10 +365,13 @@ class EventQueue:
             await client.send_event(
                 item.sound, item.confidence, item.occurred_at, snapshot=item.snapshot
             )
-        except Rejected:
+        except Rejected as e:
+            if e.status not in IMAGE_REFUSAL_STATUSES:
+                raise  # not about the image: the usual path (dropped and logged by drain)
             item.snapshot = None  # refused: never offered again, so no duplicate delivery
+            self._log_image_refused(item.sound, e)
             await client.send_event(item.sound, item.confidence, item.occurred_at)
-        except (ServerUnavailable, RateLimited):
+        except ServerUnavailable:  # a 429 or a 5xx-free outcome says nothing about the image
             item.failures += 1
             if item.failures >= MAX_IMAGE_SEND_FAILURES:
                 item.snapshot = None
