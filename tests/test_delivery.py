@@ -159,7 +159,7 @@ async def test_delivers_to_all_enabled_channels(signed_up, session, factory, red
     assert msg == {
         "kind": "alert", "alert_id": alert.id, "event_id": alert.event_id,
         "sound_key": "scream", "label": "Scream", "device_name": "Hall",
-        "at": "2026-11-07T14:05:30+00:00", "popup": True, "alarm": True,
+        "at": "2026-11-07T14:05:30+00:00", "popup": True, "alarm": True, "has_snapshot": False,
     }  # fmt: skip
 
 

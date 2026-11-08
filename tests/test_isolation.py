@@ -18,18 +18,25 @@ same request -> must succeed (positive control proving the route exists and B's 
 not touch the resource). Because A's request may be destructive, it runs last.
 """
 
+import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 import pytest
+
+from tests.doubles import make_jpeg
 
 PW = "correct-horse-1"
 TENANT_404 = {"detail": "not found"}
 
 HOUSEHOLD_SCOPED_ROUTES: list[tuple[str, str, dict | None]] = [
     ("DELETE", "/households/me/members/{a_member_id}", None),
+    ("PATCH", "/devices/{a_device_id}", {"name": "renamed"}),
+    ("PATCH", "/rooms/{a_room_id}", {"name": "renamed"}),
+    ("DELETE", "/rooms/{a_room_id}", None),
     ("DELETE", "/devices/{a_device_id}", None),
     ("POST", "/alerts/{a_alert_id}/ack", None),
+    ("GET", "/snapshots/{a_event_id}", None),
     ("DELETE", "/me/agent-tokens/{a_agent_token_id}", None),
 ]
 
@@ -60,9 +67,17 @@ async def create_device(client, headers, outbox, tag) -> dict[str, int]:
 
 
 async def create_event(client, headers, outbox, tag) -> dict[str, int]:
-    """Pair a device in the household owning `headers`, post one event, return its id."""
+    """Pair a camera in the household owning `headers`, post one event carrying a snapshot
+    (so `GET /snapshots/{event_id}` has an image to protect), return its id."""
     r = await client.post(
-        "/devices/pairing-codes", json={"name": f"ev-{tag}", "kind": "pi"}, headers=headers
+        "/devices/pairing-codes",
+        json={
+            "name": f"ev-{tag}",
+            "kind": "camera",
+            "capabilities": "video",
+            "consent_confirmed": True,
+        },
+        headers=headers,
     )
     assert r.status_code == 201, r.text
     r = await client.post("/device/pair", json={"code": r.json()["code"]})
@@ -73,7 +88,9 @@ async def create_event(client, headers, outbox, tag) -> dict[str, int]:
         "occurred_at": datetime.now(UTC).isoformat(),
     }
     r = await client.post(
-        "/device/events", json=body, headers={"X-Device-Key": r.json()["device_key"]}
+        "/device/events",
+        files={"event": (None, json.dumps(body)), "snapshot": ("s.jpg", make_jpeg(), "image/jpeg")},
+        headers={"X-Device-Key": r.json()["device_key"]},
     )
     assert r.status_code == 202, r.text
     return {"event": r.json()["event_id"]}
@@ -93,12 +110,20 @@ async def create_agent_token(client, headers, outbox, tag) -> dict[str, int]:
     return {"agent_token": r.json()["id"]}
 
 
+async def create_room(client, headers, outbox, tag) -> dict[str, int]:
+    """Create a room in the household owning `headers` (the owner) and return its id."""
+    r = await client.post("/rooms", json={"name": f"room-{tag}", "kind": "common"}, headers=headers)
+    assert r.status_code == 201, r.text
+    return {"room": r.json()["id"]}
+
+
 RESOURCE_CREATORS: list[Creator] = [
     create_member,
     create_device,
     create_event,
     create_alert,
     create_agent_token,
+    create_room,
 ]
 
 # (path, extractor(json) -> set of ids, resource name)
@@ -108,6 +133,7 @@ LISTING_ROUTES: list[tuple[str, Callable[[dict], set[int]], str]] = [
     ("/events", lambda j: {e["id"] for e in j}, "event"),
     ("/alerts", lambda j: {a["id"] for a in j}, "alert"),
     ("/me/agent-tokens", lambda j: {t["id"] for t in j}, "agent_token"),
+    ("/rooms", lambda j: {r["id"] for r in j}, "room"),
 ]
 
 

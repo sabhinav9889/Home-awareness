@@ -4,12 +4,18 @@ from app.catalog import SOUNDS, get_sound
 from app.rules.effective import effective_settings, household_enabled_sounds, members_enabled_for
 
 
-def test_catalog_has_17_sounds_and_three_default_on():
-    assert len(SOUNDS) == 17
+def test_catalog_has_24_sounds_and_defaults():
+    assert len(SOUNDS) == 24
     assert {k for k, s in SOUNDS.items() if s.default_enabled} == {
         "scream",
         "glass_breaking",
         "smoke_alarm",
+        "fall",
+        "lying_still",
+        "person_away",
+        "incident_break_in",
+        "incident_fall_confirmed",
+        "incident_property_damage",
     }
     with pytest.raises(KeyError):
         get_sound("nope")
@@ -24,6 +30,13 @@ def test_catalog_severity_urgent_list_is_exact():
         "explosion",
         "thud_fall",
         "gasping",
+        "fall",
+        "lying_still",
+        "person_away",
+        "weapon_seen",
+        "incident_break_in",
+        "incident_fall_confirmed",
+        "incident_property_damage",
     }
     assert {s.severity for s in SOUNDS.values()} == {"urgent", "normal"}
 
@@ -49,7 +62,7 @@ async def test_effective_settings_merge_override_with_defaults(client, session, 
     assert (await _put(client, h, "doorbell", repeat_count=3, window_s=30)).status_code == 200
     assert (await _put(client, h, "scream", enabled=False)).status_code == 200
     eff = await effective_settings(session, member.id)
-    assert len(eff) == 17
+    assert len(eff) == 24
     assert (eff["doorbell"].enabled, eff["doorbell"].repeat_count, eff["doorbell"].window_s) == (
         True,
         3,
@@ -59,7 +72,7 @@ async def test_effective_settings_merge_override_with_defaults(client, session, 
     assert eff["dog_barking"].repeat_count == 5 and eff["dog_barking"].enabled is False
     assert eff["glass_breaking"].enabled is True
     listed = {s["sound_key"]: s for s in (await client.get("/me/sound-settings", headers=h)).json()}
-    assert len(listed) == 17 and listed["doorbell"]["repeat_count"] == 3
+    assert len(listed) == 24 and listed["doorbell"]["repeat_count"] == 3
     # second PUT updates in place
     assert (await _put(client, h, "doorbell", repeat_count=4)).status_code == 200
     assert (await effective_settings(session, member.id))["doorbell"].repeat_count == 4

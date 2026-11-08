@@ -12,7 +12,7 @@ from app.db import get_session
 from app.disclaimer import DISCLAIMER
 from app.households.models import Household, Invite
 from app.households.schemas import HouseholdOut, HouseholdPatch, InviteOut, MemberOut
-from app.live.hub import publish_disconnect
+from app.live.hub import publish_disconnect, publish_to_household
 from app.redis import get_redis
 from app.security import hash_token, new_token
 from app.tenancy import Tenant, get_tenant
@@ -38,6 +38,10 @@ async def get_household(
         id=household.id,
         name=household.name,
         timezone=household.timezone,
+        away=household.away,
+        night_start=household.night_start,
+        night_end=household.night_end,
+        snapshot_retention_days=household.snapshot_retention_days,
         members=[MemberOut(id=m.id, email=m.email, role=m.role) for m in members],
     )
 
@@ -45,17 +49,38 @@ async def get_household(
 @router.patch(
     "/me",
     response_model=HouseholdOut,
-    description=f"Owner sets the household timezone used in alert times. {DISCLAIMER}",
+    description=(
+        "Any member toggles Away mode; the owner sets the timezone, night hours and snapshot "
+        f"retention. {DISCLAIMER}"
+    ),
 )
 async def patch_household(
     body: HouseholdPatch,
     tenant: Annotated[Tenant, Depends(get_tenant)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
 ) -> HouseholdOut:
-    _require_owner(tenant)
+    if body.owner_fields:
+        _require_owner(tenant)
     household = await session.get(Household, tenant.household_id)
-    household.timezone = body.timezone
+    sent = body.model_fields_set
+    if body.timezone is not None:
+        household.timezone = body.timezone
+    if "night_start" in sent or "night_end" in sent:
+        household.night_start = body.night_start
+        household.night_end = body.night_end
+    if body.snapshot_retention_days is not None:
+        household.snapshot_retention_days = body.snapshot_retention_days
+    away_changed = body.away is not None and body.away != household.away
+    if body.away is not None:
+        household.away = body.away
     await session.commit()
+    if away_changed:
+        await publish_to_household(
+            redis,
+            tenant.household_id,
+            {"kind": "guarding", "away": household.away, "by_email": tenant.member.email},
+        )
     return await get_household(tenant, session)
 
 

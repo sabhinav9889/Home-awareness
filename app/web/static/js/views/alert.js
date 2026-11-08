@@ -7,6 +7,10 @@
 // it"; my own ack (from another tab or device) just closes it. Acks for anything else are
 // ignored. Server strings only ever become text nodes.
 //
+// Photos: an alert with a camera snapshot fetches it with the session token as a blob and
+// shows it from an object URL (the token is never in a URL). The URL is revoked when the alert
+// leaves the queue or the session resets. No snapshot, or a 404: "No photo".
+//
 // Catch-up: alerts sent while the socket was down are lost to it, so on every transition to
 // "live" (first connect included) the screen asks GET /alerts and shows the ones from the
 // last CATCH_UP_MS nobody has acknowledged and this tab hasn't seen, with the member's current
@@ -16,7 +20,7 @@
 // screen appears or its shown alert changes, focus goes to the dialog itself (not a button),
 // every button stays disabled for GUARD_MS, and Escape does nothing: acknowledging or
 // dismissing takes a deliberate click, or Tab to the button and Enter.
-import { request } from "../api.js";
+import { request, requestBlob } from "../api.js";
 import { subscribe } from "../live.js";
 import { notifyIfHidden, startBeep } from "../notify.js";
 import { navigate } from "../router.js";
@@ -76,7 +80,7 @@ export function start({ timezone } = {}) {
 // On logout (any public view): forget everything, close the screen.
 export function reset() {
   generation += 1;
-  for (const item of queue) closeNote(item);
+  for (const item of queue) dispose(item);
   queue = [];
   seen.clear();
   me = null;
@@ -132,6 +136,7 @@ function onAlert(msg) {
   const item = {
     key,
     alertId: msg.alert_id,
+    eventId: msg.event_id,
     test: msg.event_id == null,
     label: msg.label || "Alert",
     device: msg.device_name,
@@ -141,9 +146,14 @@ function onAlert(msg) {
     already: false, // learned from our own 409 rather than a live ack
     busy: false,
     error: null,
+    photo: msg.event_id == null ? "none" : msg.has_snapshot === false ? "missing" : "loading",
+    photoUrl: null,
+    photoImg: null,
+    gone: false,
   };
   queue.push(item);
-  while (queue.length > KEEP_QUEUED) closeNote(queue.shift());
+  while (queue.length > KEEP_QUEUED) dispose(queue.shift());
+  if (item.photo === "loading") loadPhoto(item);
   item.note = notifyIfHidden(item.label,
     item.test ? "Test alert from Home Awareness" : `${item.device || "A sensor"} · ${time(item.at)}`,
     key);
@@ -187,8 +197,32 @@ function closeNote(item) {
   } catch { /* gone */ }
 }
 
-function remove(item) {
+// An alert leaves the queue for good: close its notification, free its photo.
+function dispose(item) {
   closeNote(item);
+  item.gone = true;
+  if (item.photoUrl) URL.revokeObjectURL(item.photoUrl);
+  item.photoUrl = null;
+  item.photoImg = null;
+}
+
+async function loadPhoto(item) {
+  let blob = null;
+  try {
+    blob = await requestBlob(`/snapshots/${encodeURIComponent(item.eventId)}`);
+  } catch { /* offline or an error: no photo to show */ }
+  if (item.gone) return; // closed while loading: nothing to revoke yet
+  if (blob) {
+    item.photoUrl = URL.createObjectURL(blob);
+    item.photo = "ready";
+  } else {
+    item.photo = "missing";
+  }
+  if (queue.at(-1) === item) render();
+}
+
+function remove(item) {
+  dispose(item);
   queue = queue.filter((i) => i !== item);
   render();
 }
@@ -252,6 +286,19 @@ function button(label, action, onclick, primary = false, disabled = false) {
   }, label);
 }
 
+function photoBlock(item) {
+  if (item.photo === "none") return null;
+  if (item.photo === "ready") {
+    if (!item.photoImg) {
+      item.photoImg = el("img", { class: "alert-photo", src: item.photoUrl,
+        alt: `Camera snapshot: ${item.label}` });
+    }
+    return item.photoImg;
+  }
+  return el("p", { class: "alert-nophoto" },
+    item.photo === "loading" ? "Loading photo…" : "No photo");
+}
+
 function content(item, more) {
   const at = time(item.at);
   const handled = item.state === "handled";
@@ -280,6 +327,7 @@ function content(item, more) {
       icon(),
       el("h1", { id: "alert-title" }, item.label),
       item.test ? null : el("div", { class: "alert-device" }, item.device || "A sensor"),
+      photoBlock(item),
       el("div", { id: "alert-desc", class: "alert-sub" },
         item.test ? `Your alerts reach this dashboard${at ? ` · ${at}` : ""}` : at),
       handled ? el("p", { class: "alert-handled", role: "status" },

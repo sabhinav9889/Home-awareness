@@ -70,8 +70,75 @@ SOUNDS: dict[str, Sound] = {
             "thud_fall", "Loud thud / fall", "Accident", False, "experimental", severity="urgent"
         ),
         Sound("doorbell", "Doorbell", "Household", False, "good"),
+        # Camera events (reported by video sensors).
+        Sound(
+            "fall",
+            "Fall",
+            "Health",
+            True,
+            "experimental",
+            default_cooldown_s=120,
+            severity="urgent",
+        ),
+        Sound(
+            "lying_still",
+            "Lying still (possible collapse)",
+            "Health",
+            True,
+            "experimental",
+            default_cooldown_s=600,
+            severity="urgent",
+        ),
+        Sound(
+            "person_away",
+            "Person while guarding",
+            "Security",
+            True,
+            "good",
+            default_cooldown_s=300,
+            severity="urgent",
+        ),
+        Sound(
+            "weapon_seen",
+            "Weapon seen",
+            "Security",
+            False,
+            "experimental",
+            default_cooldown_s=300,
+            severity="urgent",
+        ),
+        # Incidents are raised by the server from combined events, never by a device.
+        Sound(
+            "incident_break_in",
+            "Possible break-in",
+            "Incidents",
+            True,
+            "experimental",
+            default_cooldown_s=300,
+            severity="urgent",
+        ),
+        Sound(
+            "incident_fall_confirmed",
+            "Fall confirmed",
+            "Incidents",
+            True,
+            "experimental",
+            default_cooldown_s=300,
+            severity="urgent",
+        ),
+        Sound(
+            "incident_property_damage",
+            "Possible property damage",
+            "Incidents",
+            True,
+            "experimental",
+            default_cooldown_s=300,
+            severity="urgent",
+        ),
     ]
 }
+
+INCIDENT_KEYS: frozenset[str] = frozenset(k for k in SOUNDS if k.startswith("incident_"))
 
 
 def get_sound(key: str) -> Sound:

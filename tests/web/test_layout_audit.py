@@ -7,7 +7,7 @@ from tests.web.test_overview import _device, _event, _heartbeat, _member
 
 pytestmark = pytest.mark.web
 
-PRIVATE = ["#/overview", "#/sounds", "#/sensors", "#/channels", "#/household"]
+PRIVATE = ["#/overview", "#/sounds", "#/rooms", "#/sensors", "#/channels", "#/household"]
 PUBLIC = ["#/login", "#/signup"]
 SIZES = [(360, 780), (1280, 800)]
 
@@ -49,6 +49,7 @@ def test_no_horizontal_overflow(new_page, live, hash_, size, scheme):
     ready = {
         "#/overview": "section.events[aria-busy='false']",
         "#/sounds": ".snd-row",
+        "#/rooms": "main [data-ready='true']",
         "#/sensors": "main [data-ready='true']",
         "#/channels": "main [data-ready='true']",
         "#/household": "main [data-ready='true']",

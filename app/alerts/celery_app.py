@@ -73,12 +73,14 @@ def check_offline_devices_task() -> None:
 
 
 async def _sweep_stale() -> None:
-    from app.alerts.sweep import sweep_stale_alerts
+    from app.alerts.sweep import sweep_snapshots, sweep_stale_alerts
 
     engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
     try:
         async with async_sessionmaker(engine, expire_on_commit=False)() as session:
             await sweep_stale_alerts(session, datetime.now(UTC))
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            await sweep_snapshots(session, datetime.now(UTC))
     finally:
         await engine.dispose()
 

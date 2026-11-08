@@ -20,6 +20,8 @@ from app.households.timezone import tz_label
 from app.live.hub import publish_to_member
 from app.metrics import DELIVERIES
 from app.rules.models import AlertPreference
+from app.snapshots import store
+from app.snapshots.models import Snapshot
 from app.tenancy import Tenant
 
 TEST_TEXT = "🔔 Test alert from Home Awareness — your alerts work."
@@ -160,6 +162,11 @@ async def _deliver_claimed(
     topic = prefs.ntfy_topic if prefs else None
 
     device_name = "a removed sensor"
+    jpeg: bytes | None = None
+    if alert.event_id is not None:
+        jpeg = await store.try_load(
+            await session.scalar(tenant.select(Snapshot).where(Snapshot.event_id == alert.event_id))
+        )
     if alert.event_id is not None:
         event = await session.scalar(tenant.select(Event).where(Event.id == alert.event_id))
         if event is not None and event.device_id is not None:
@@ -203,20 +210,33 @@ async def _deliver_claimed(
                     "at": at.isoformat(),
                     "popup": popup,
                     "alarm": alarm,
+                    "has_snapshot": jpeg is not None,
                 },
             ),
         )
     if chat_id:
         new(
             "telegram",
-            (lambda: telegram.send_message(http, token, chat_id, text)) if token else None,
+            (
+                (lambda: telegram.send_photo_or_message(http, token, chat_id, jpeg, text))
+                if jpeg is not None
+                else (lambda: telegram.send_message(http, token, chat_id, text))
+            )
+            if token
+            else None,
         )
     if topic:
         priority, tags = ("urgent", "rotating_light") if urgent else ("high", "bell")
         new(
             "ntfy",
             lambda: ntfy.publish(
-                http, settings.ntfy_base_url, topic, text, priority=priority, tags=tags
+                http,
+                settings.ntfy_base_url,
+                topic,
+                text,
+                priority=priority,
+                tags=tags,
+                attachment=jpeg,
             ),
         )
     await session.commit()  # every Delivery row exists (pending) before anything is sent

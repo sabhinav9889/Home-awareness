@@ -2,6 +2,7 @@ import re
 from functools import lru_cache
 from typing import Literal
 
+from cryptography.fernet import Fernet
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -31,6 +32,8 @@ class Settings(BaseSettings):
     telegram_bot_username: str | None = None
     telegram_webhook_secret: str | None = None
     ntfy_base_url: str = "https://ntfy.sh"
+    snapshot_key: str | None = None
+    snapshot_dir: str = "/data/snapshots"
 
     @field_validator("jwt_secret")
     @classmethod
@@ -55,6 +58,21 @@ class Settings(BaseSettings):
                 "Telegram's rule for setWebhook secret_token; generate one with "
                 'python -c "import secrets;print(secrets.token_urlsafe(48))"'
             )
+        return v
+
+    @field_validator("snapshot_key")
+    @classmethod
+    def _snapshot_key_is_fernet(cls, v: str | None) -> str | None:
+        if not v:  # Compose passes "" when unset: snapshots stay off
+            return None
+        try:
+            Fernet(v.encode())
+        except Exception:
+            raise ValueError(
+                "SNAPSHOT_KEY must be a urlsafe base64 32-byte key; generate one with "
+                'python -c "from cryptography.fernet import Fernet; '
+                'print(Fernet.generate_key().decode())"'
+            ) from None
         return v
 
 

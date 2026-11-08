@@ -46,3 +46,22 @@ export async function request(method, path, body) {
   if (Number.isFinite(retry) && retry >= 0) err.retryAfter = retry; // seconds, on a 429
   throw err;
 }
+
+// A binary GET with the session token (never in the URL): the Blob, or null for a 404
+// (no photo). Other failures throw an ApiError like request().
+export async function requestBlob(path) {
+  const token = auth.token();
+  const headers = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  let res;
+  try {
+    res = await fetch(path, { headers });
+  } catch {
+    throw new ApiError(0, "Can't reach the server — check your connection.");
+  }
+  if (res.status === 404) return null;
+  if (res.ok) return res.blob();
+  if (res.status === 401 && token && token === auth.token()) auth.logout(SESSION_ENDED);
+  const body = await res.json().catch(() => null);
+  throw new ApiError(res.status, detailText(body, res.status), body);
+}

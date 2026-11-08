@@ -22,7 +22,9 @@ from app.live.router import router as live_router
 from app.logging import RequestLogMiddleware, configure_logging
 from app.metrics import render
 from app.redis import get_redis
+from app.rooms.router import router as rooms_router
 from app.rules.router import router as rules_router
+from app.snapshots.router import router as snapshots_router
 from app.web import mount_dashboard
 
 
@@ -68,7 +70,9 @@ def create_app(*, run_background_jobs: bool = False) -> FastAPI:
     app.include_router(households_router)
     app.include_router(rules_router)
     app.include_router(devices_router)
+    app.include_router(rooms_router)
     app.include_router(events_router)
+    app.include_router(snapshots_router)
     app.include_router(alerts_router)
     app.include_router(live_router)
     mount_dashboard(app)  # last: the /app mount must never shadow an API route

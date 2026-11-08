@@ -61,6 +61,79 @@ export async function householdView() {
       ". The owner can change it.");
   }
 
+  // --- cameras: night hours and photo retention (owner only) ---
+  let cameraPanel = null;
+  if (isOwner) {
+    const hhmm = (t) => (t ? String(t).slice(0, 5) : "");
+    const nightMsg = el("p", { class: "night-msg", role: "status" });
+    const start = el("input", { id: "hh-night-start", type: "time", name: "night_start",
+      value: hhmm(household.night_start) });
+    const end = el("input", { id: "hh-night-end", type: "time", name: "night_end",
+      value: hhmm(household.night_end) });
+    const saveNight = el("button", { type: "submit", class: "btn" }, "Save night hours");
+    const nightForm = el("form", { class: "pair-form night-form", novalidate: true },
+      el("div", { class: "field" }, el("label", { for: "hh-night-start" }, "Night starts"), start),
+      el("div", { class: "field" }, el("label", { for: "hh-night-end" }, "Night ends"), end),
+      saveNight);
+    nightForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      nightMsg.classList.remove("is-error");
+      if (Boolean(start.value) !== Boolean(end.value)) {
+        nightMsg.classList.add("is-error");
+        nightMsg.textContent = "Set both times, or clear both to turn night hours off.";
+        return;
+      }
+      saveNight.disabled = true;
+      try {
+        household = await request("PATCH", "/households/me", {
+          night_start: start.value || null, night_end: end.value || null,
+        });
+        nightMsg.textContent = start.value
+          ? `Night hours saved: cameras guard from ${start.value} to ${end.value}.`
+          : "Night hours are off.";
+      } catch (err) {
+        nightMsg.classList.add("is-error");
+        nightMsg.textContent = err.detail || err.message;
+      } finally {
+        saveNight.disabled = false;
+      }
+    });
+
+    const keepMsg = el("p", { class: "keep-msg", role: "status" });
+    const keep = el("select", { id: "hh-keep", name: "snapshot_retention_days" },
+      [[1, "1 day"], [7, "7 days"], [30, "30 days"]].map(([v, label]) =>
+        el("option", { value: String(v) }, label)));
+    keep.value = String(household.snapshot_retention_days);
+    keep.addEventListener("change", async () => {
+      const value = keep.value;
+      keep.disabled = true;
+      keepMsg.classList.remove("is-error");
+      keepMsg.textContent = "";
+      try {
+        household = await request("PATCH", "/households/me",
+          { snapshot_retention_days: Number(value) });
+        keepMsg.textContent = "Photo retention saved.";
+      } catch (err) {
+        keep.value = String(household.snapshot_retention_days);
+        keepMsg.classList.add("is-error");
+        keepMsg.textContent = err.detail || err.message;
+      } finally {
+        keep.disabled = false;
+      }
+    });
+    cameraPanel = el("section", { class: "panel", "aria-labelledby": "cam-set-h" },
+      el("h2", { id: "cam-set-h" }, "Cameras"),
+      el("p", { class: "panel-intro" }, "During night hours, and whenever someone turns Away " +
+        "on, a person seen by a camera raises an alert."),
+      nightForm,
+      el("p", { class: "hint-inline" }, "Times use the household timezone. Clear both to " +
+        "turn night hours off."),
+      nightMsg,
+      el("div", { class: "field" }, el("label", { for: "hh-keep" }, "Keep alert photos for"), keep,
+        el("p", { class: "hint-inline" }, "Older photos are deleted automatically.")),
+      keepMsg);
+  }
+
   // --- members ---
   const membersBox = el("div", { class: "member-list" });
   const membersMsg = el("div", { class: "msgs" });
@@ -192,6 +265,7 @@ export async function householdView() {
     el("header", { class: "page-head" }, el("h1", {}, "Household")),
     el("section", { class: "panel", "aria-labelledby": "hh-name" },
       el("h2", { id: "hh-name", class: "hh-name" }, household.name), tzControl, tzMsg),
+    cameraPanel,
     el("section", { class: "panel", "aria-labelledby": "mem-h" },
       el("h2", { id: "mem-h" }, "Members"), membersMsg, membersBox),
     invitePanel,

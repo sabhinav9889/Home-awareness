@@ -2,7 +2,7 @@
 
 CSP = (
     "default-src 'self'; style-src 'self' https://fonts.googleapis.com; "
-    "font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self' data:; "
+    "font-src https://fonts.gstatic.com; connect-src 'self'; img-src 'self' data: blob:; "
     "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 )
 

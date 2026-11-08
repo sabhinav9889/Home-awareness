@@ -7,7 +7,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY alembic.ini ./
 COPY app ./app
 COPY migrations ./migrations
-RUN useradd --system --uid 1000 --no-create-home app
+RUN useradd --system --uid 1000 --no-create-home app \
+    && mkdir -p /data/snapshots && chown app /data/snapshots
 USER app
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000

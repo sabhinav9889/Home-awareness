@@ -3,7 +3,7 @@
 // published in between is missed; leaving the view unsubscribes (the socket stays open).
 // Events are keyed by id, so the initial fetch, live messages and the catch-up fetch after
 // every reconnect never produce duplicate rows.
-import { request } from "../api.js";
+import { request, requestBlob } from "../api.js";
 import { subscribe } from "../live.js";
 import { el } from "../ui.js";
 
@@ -17,11 +17,14 @@ const DEVICES_REFRESH_MS = 30_000; // fresh last_seen_at; first heartbeats publi
 const FIRST_CONNECT_WAIT_MS = 3000; // load the data once the socket listens (or gave up)
 const ALERTS_REFRESH_MS = 800; // after a live event: did it alert me?
 const EARLY_MAX = 500; // messages held while loading; past this, catch up instead
+const NOTICE_MS = 8000; // how long an Away toggle error stays
 
 // Shown when the sensor's heartbeat says its microphone input level is clipping.
 export const MIC_CLIPPING_NOTE = "Microphone is overloading — lower its input level";
 
-export const KINDS = { laptop: "Laptop", phone: "Phone", pi: "Raspberry Pi", other: "Sensor" };
+export const KINDS = {
+  laptop: "Laptop", phone: "Phone", pi: "Raspberry Pi", camera: "Camera", other: "Sensor",
+};
 
 function validTimeZone(tz) {
   try {
@@ -72,6 +75,10 @@ export async function overviewView(_params, { household }) {
   let devices = new Map(); // device id -> /devices row
   let truncated = false; // older events exist that we don't hold
   let closed = false;
+  const guard = { away: Boolean(household.away), start: household.night_start,
+    end: household.night_end };
+  const photos = new Map(); // event id -> {state: "loading"|"ready"|"missing", url}
+  const openPhotos = new Set(); // event ids whose photo row is expanded
 
   function addEvents(rows) {
     for (const e of rows) if (!events.has(e.id)) events.set(e.id, e);
@@ -247,15 +254,93 @@ export async function overviewView(_params, { household }) {
     const rows = sorted().slice(0, TABLE_ROWS);
     tbody.replaceChildren(...rows.map((e) => {
       const [text, cls] = result(e, alerted);
-      return el("tr", {},
+      const row = el("tr", {},
         el("td", { class: "cell-time" }, fmt.time(new Date(e.received_at))),
         el("td", { class: "cell-sound" }, e.label),
         el("td", {}, e.device_name || "Removed sensor"),
         el("td", { class: "col-conf" }, Number(e.confidence).toFixed(2)),
-        el("td", {}, el("span", { class: `chip ${cls}` }, text)));
-    }));
+        el("td", {}, el("span", { class: `chip ${cls}` }, text),
+          e.has_snapshot ? photoButton(e) : null));
+      return openPhotos.has(e.id) ? [row, photoRow(e)] : [row];
+    }).flat());
     emptyNote.hidden = rows.length > 0;
   }
+
+  function photoButton(e) {
+    const open = openPhotos.has(e.id);
+    const btn = el("button", { type: "button", class: "link-btn photo-btn",
+      "aria-expanded": String(open) }, "Photo");
+    btn.addEventListener("click", () => {
+      if (openPhotos.has(e.id)) openPhotos.delete(e.id);
+      else {
+        openPhotos.add(e.id);
+        loadPhoto(e.id);
+      }
+      renderEvents();
+    });
+    return btn;
+  }
+
+  function photoRow(e) {
+    const ph = photos.get(e.id);
+    const body = ph && ph.state === "ready"
+      ? el("img", { src: ph.url, alt: `Camera snapshot: ${e.label}`, class: "event-photo-img" })
+      : el("span", { class: "muted" }, !ph ? "Couldn't load the photo. Close and reopen to retry."
+        : ph.state === "missing" ? "No photo" : "Loading photo…");
+    return el("tr", { class: "event-photo-row" },
+      el("td", { colspan: 5, class: "event-photo" }, body));
+  }
+
+  async function loadPhoto(id) {
+    if (photos.has(id)) return;
+    photos.set(id, { state: "loading", url: null });
+    let blob = null;
+    try {
+      blob = await requestBlob(`/snapshots/${encodeURIComponent(id)}`);
+    } catch {
+      // A failed fetch (not a 404) is not cached: closing and reopening the row retries.
+      if (closed) return;
+      photos.delete(id);
+      renderEvents();
+      return;
+    }
+    if (closed) return;
+    if (blob) photos.set(id, { state: "ready", url: URL.createObjectURL(blob) });
+    else photos.set(id, { state: "missing", url: null });
+    renderEvents();
+  }
+
+  // --- Away toggle ---
+  const guardState = el("span", { class: "guard-state" });
+  const guardBtn = el("button", { type: "button", class: "btn btn-quiet guard-btn",
+    "aria-pressed": "false" }, "Away");
+  // Errors of this button only; the "who turned Away on/off" notice is global (app.js).
+  const guardError = el("p", { class: "guard-error is-error", role: "alert" });
+  let noticeTimer = null;
+  function setNotice(text) {
+    guardError.textContent = text;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => { guardError.textContent = ""; }, NOTICE_MS);
+  }
+  function renderGuard() {
+    guardBtn.setAttribute("aria-pressed", String(guard.away));
+    const hhmm = (t) => String(t).slice(0, 5);
+    const night = guard.start && guard.end
+      ? ` · night hours ${hhmm(guard.start)}–${hhmm(guard.end)}` : "";
+    guardState.textContent = (guard.away ? "Away — guarding" : "Home") + night;
+  }
+  guardBtn.addEventListener("click", async () => {
+    guardBtn.disabled = true;
+    try {
+      const out = await request("PATCH", "/households/me", { away: !guard.away });
+      guard.away = out.away; // the live message adds the "who" notice (app.js), for every tab
+      renderGuard();
+    } catch (err) {
+      setNotice(err.detail || err.message);
+    } finally {
+      guardBtn.disabled = false;
+    }
+  });
 
   function channelsPanel(p) {
     const on = (v) => el("span", { class: v ? "ch-on" : "ch-off" }, v ? "On" : "Off");
@@ -351,6 +436,7 @@ export async function overviewView(_params, { household }) {
         addEvents([{
           id: msg.event_id, label: msg.label, device_name: msg.device_name,
           confidence: msg.confidence, received_at: msg.received_at, merged: msg.merged,
+          has_snapshot: Boolean(msg.has_snapshot),
         }]);
         renderStatus();
         renderEvents();
@@ -372,11 +458,16 @@ export async function overviewView(_params, { household }) {
         renderSensors();
         break;
       }
+      case "guarding":
+        guard.away = Boolean(msg.away);
+        renderGuard();
+        break;
       default: // alert_ack etc.: handled by later views
     }
   }
 
   renderAll();
+  renderGuard();
   loaded = true;
   for (const msg of early.splice(0)) onMessage(msg);
   // The socket (re)opened while loading, or the buffer overflowed: the fetch may predate
@@ -387,6 +478,8 @@ export async function overviewView(_params, { household }) {
 
   const node = el("section", { class: "stack overview" },
     el("header", { class: "page-head" }, el("h1", {}, "Overview"), pill),
+    el("div", { class: "guard-bar" }, guardBtn, guardState),
+    guardError,
     statusBox,
     el("section", { class: "sensors", "aria-labelledby": "sensors-h" },
       el("h2", { id: "sensors-h" }, "Sensors"), sensorGrid),
@@ -400,6 +493,9 @@ export async function overviewView(_params, { household }) {
       clearInterval(ticker);
       clearInterval(devicesTimer);
       clearTimeout(alertsTimer);
+      clearTimeout(noticeTimer);
+      for (const ph of photos.values()) if (ph.url) URL.revokeObjectURL(ph.url);
+      photos.clear();
     },
   };
 }
