@@ -351,6 +351,11 @@ class EventQueue:
         """Drop queued events whose sound fails ``keep`` (e.g. no longer enabled)."""
         self._items = deque(i for i in self._items if keep(i.sound))
 
+    def drop_snapshots(self) -> None:
+        """Forget every queued image (the household turned snapshots off); events stay."""
+        for item in self._items:
+            item.snapshot = None
+
     def _pop_if_head(self, item: _Pending) -> None:
         # A put() during an awaited send may have evicted this item at the cap.
         if self._items and self._items[0] is item:

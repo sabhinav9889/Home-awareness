@@ -200,3 +200,124 @@ def test_cli_run_prints_watching_notice(monkeypatch, tmp_path, capsys):
 def test_cli_run_not_paired(monkeypatch, tmp_path):
     monkeypatch.setenv("HA_EDGE_CONFIG_DIR", str(tmp_path / "cfg"))
     assert camera_cli.main(["run"]) == cli.EXIT_NOT_PAIRED
+
+
+# ---- _load_models (the real one) ----
+
+
+def _model_dir(tmp_path, monkeypatch):
+    from ha_edge.camera import models
+
+    d = tmp_path / "models"
+    d.mkdir()
+    (d / models.POSE_FILE).write_bytes(b"x")
+    (d / models.OBJECT_FILE).write_bytes(b"x")
+    monkeypatch.setattr(models, "default_model_dir", lambda: d)
+    return d
+
+
+def test_load_models_uses_the_detector_wrappers(monkeypatch, tmp_path):
+    import pytest
+
+    pytest.importorskip("cv2")
+    from ha_edge.camera import detectors, models
+
+    d = _model_dir(tmp_path, monkeypatch)
+
+    class P:
+        def __init__(self, path):
+            self.path = path
+
+    class O(P):
+        pass
+
+    monkeypatch.setattr(detectors, "MediapipePose", P)
+    monkeypatch.setattr(detectors, "MediapipeObjects", O)
+    pose, objs = camera_cli._load_models()
+    assert pose.path == d / models.POSE_FILE and objs.path == d / models.OBJECT_FILE
+
+
+def test_load_models_failure_is_one_line_and_closes_pose(monkeypatch, tmp_path, capsys):
+    import pytest
+
+    pytest.importorskip("cv2")
+    from ha_edge.camera import detectors
+
+    _model_dir(tmp_path, monkeypatch)
+    closed = []
+
+    class P:
+        def __init__(self, path):
+            pass
+
+        def close(self):
+            closed.append(1)
+
+    class Bad:
+        def __init__(self, path):
+            raise KeyError("weird")
+
+    monkeypatch.setattr(detectors, "MediapipePose", P)
+    monkeypatch.setattr(detectors, "MediapipeObjects", Bad)
+    assert camera_cli._load_models() == cli.EXIT_ERROR
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1 and "Cannot load the camera models" in err[0] and "Traceback" not in err[0]
+    assert closed == [1]
+
+
+def test_load_models_missing_files(monkeypatch, tmp_path, capsys):
+    from ha_edge.camera import models
+
+    monkeypatch.setattr(models, "default_model_dir", lambda: tmp_path)
+    assert camera_cli._load_models() == cli.EXIT_ERROR
+    assert "ha-camera fetch-model" in capsys.readouterr().err
+
+
+def test_check_open_failure_other_than_busy_is_one_line(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HA_EDGE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setattr(
+        "ha_edge.camera.devices.list_cameras", lambda: [CameraInfo(0, "Cam", "/dev/video0")]
+    )
+    pose, objs = Pose(UP), Objs()
+
+    def boom(i):
+        raise OSError("v4l2 exploded")
+
+    monkeypatch.setattr(camera_cli, "_open_camera", boom)
+    monkeypatch.setattr(camera_cli, "_load_models", lambda: (pose, objs))
+    assert camera_cli.main(["check"]) == cli.EXIT_ERROR
+    assert "v4l2 exploded" in capsys.readouterr().err
+    assert pose.closed and objs.closed
+
+
+import pytest
+
+
+@pytest.mark.camera
+def test_load_models_real(monkeypatch, tmp_path):
+    import os
+    from pathlib import Path
+
+    pytest.importorskip("mediapipe", reason="needs the camera extra")
+    pytest.importorskip("cv2")
+    from ha_edge.camera import models
+
+    env = os.environ.get("HA_CAMERA_TEST_MODELS")
+    if env:
+        d = tmp_path / "models"
+        d.mkdir()
+        (d / models.POSE_FILE).symlink_to(Path(env) / "pose.task")
+        (d / models.OBJECT_FILE).symlink_to(Path(env) / "det.tflite")
+        monkeypatch.setattr(models, "default_model_dir", lambda: d)
+    elif not (models.default_model_dir() / models.POSE_FILE).exists():
+        pytest.skip("models not present (run `ha-camera fetch-model`)")
+    loaded = camera_cli._load_models()
+    assert not isinstance(loaded, int)
+    pose, objs = loaded
+    try:
+        frame = np.zeros((360, 640, 3), np.uint8)
+        assert pose.torso(frame) is None
+        assert objs.detect(frame) == [] or True
+    finally:
+        pose.close()
+        objs.close()

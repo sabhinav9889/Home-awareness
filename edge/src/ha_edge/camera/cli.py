@@ -130,24 +130,25 @@ def _pick_camera(flag: str | None, cfg):
 
 
 def _load_models():
-    """(pose, objects) from the model dir; an exit code after printing why."""
-    from ha_edge.camera import models
+    """(pose, objects) from the model dir; an exit code after printing why (one line)."""
+    from ha_edge.camera import detectors, models
 
     d = models.default_model_dir()
     if not (d / models.POSE_FILE).is_file() or not (d / models.OBJECT_FILE).is_file():
         _err("The camera models are missing. Run `ha-camera fetch-model` first.")
         return EXIT_ERROR
+    pose = None
     try:
-        pose = models.MediapipePose(d / models.POSE_FILE)
-        try:
-            return pose, models.MediapipeObjects(d / models.OBJECT_FILE)
-        except BaseException:
-            pose.close()
-            raise
+        import cv2  # noqa: F401 - fail early and clearly if the extra is missing
+
+        pose = detectors.MediapipePose(d / models.POSE_FILE)
+        return pose, detectors.MediapipeObjects(d / models.OBJECT_FILE)
     except ImportError:
         _err("The camera extra is not installed. Run `uv sync --extra camera`.")
-    except (OSError, ValueError, RuntimeError) as e:
-        _err(f"Cannot load the camera models: {e}")
+    except Exception as e:  # noqa: BLE001 - any startup failure is one line, never a traceback
+        _err(f"Cannot load the camera models: {type(e).__name__}: {e}")
+    if pose is not None:
+        pose.close()
     return EXIT_ERROR
 
 
@@ -261,6 +262,9 @@ def _cmd_check(args: argparse.Namespace) -> int:
             source = _open_camera(cam.index)
         except CameraBusy:
             print(f"Camera {cam.name}: {check.advice(check.CheckSummary())}")
+            return EXIT_ERROR
+        except Exception as e:  # noqa: BLE001 - e.g. cv2 missing or a driver error: one line
+            _err(f"Cannot open the camera {cam.name}: {type(e).__name__}: {e}")
             return EXIT_ERROR
         print(
             f"Looking through: {cam.name} for {args.seconds:g} s. Nothing is recorded or sent.",

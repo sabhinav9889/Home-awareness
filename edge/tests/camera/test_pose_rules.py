@@ -169,3 +169,12 @@ def test_person_tracker_blip_and_hold():
     tr = PersonTracker()
     seq = [True, True, True, False, True, False, False, False]
     assert [tr.update(x) for x in seq] == [False, False, True, True, True, True, False, False]
+
+
+def test_lying_rearm_fires_again_on_next_frame():
+    det = LyingStillDetector()
+    assert stream(det, lying(0, 130)).count(True) == 1
+    assert not det.update(sample(131, 85, 0.8, 0.5, 0.8))
+    det.rearm()
+    assert det.update(sample(132, 85, 0.8, 0.5, 0.8)) is True
+    assert det.update(sample(133, 85, 0.8, 0.5, 0.8)) is False

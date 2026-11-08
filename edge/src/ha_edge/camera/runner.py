@@ -33,17 +33,23 @@ from ha_edge.camera.pose_rules import (
     torso_sample,
 )
 from ha_edge.camera.snapshot import encode_snapshot
-from ha_edge.sensor import EXIT_OK, EXIT_REVOKED, REVOKED_MESSAGE
 
 log = logging.getLogger(__name__)
 
+EXIT_OK = 0
+EXIT_REVOKED = 5  # same value as ha_edge.sensor
+REVOKED_MESSAGE = (
+    "This camera was removed. Pair it again with `ha-camera pair --server URL --code CODE`."
+)
+STOP_WAIT_S = 5.0  # on exit, how long to wait for a running inference before giving up
+WAITING_MESSAGE = "waiting for the server; detection starts when it answers"
 COOLDOWNS_S: dict[str, float] = {
     "fall": 120.0,
     "lying_still": 600.0,
     "person_away": 300.0,
     "weapon_seen": 300.0,
 }
-RULE_CONFIDENCE = 0.9  # fall / lying_still come from rules, not a model score
+RULE_CONFIDENCE = 1.0  # fall / lying_still come from rules, not a model score
 DEFAULT_OBJECT_THRESHOLD = 0.5
 CONFIG_REFRESH_S = 15.0
 NO_FRAME_S = 3.0  # no frame for this long: the camera is busy or unplugged
@@ -139,6 +145,12 @@ class Analyzer:
         return res
 
 
+def _consume(fut: asyncio.Future) -> None:
+    """Mark a model call's outcome as seen (it may finish after we stopped waiting)."""
+    if not fut.cancelled():
+        fut.exception()
+
+
 def _close(obj: Any, what: str) -> None:
     close = getattr(obj, "close", None)
     if close is None:
@@ -173,6 +185,7 @@ async def run_camera(
     analyzer = Analyzer(pose, objects)
     queue = EventQueue(clock=clock)
     cfg: DeviceConfig | None = None  # None until the first successful heartbeat
+    inflight: asyncio.Future | None = None  # the model call running in a worker thread
     last_sent: dict[str, float] = {}
     current: list[FrameSource] = []  # at most one open source (closed in `finally`)
     code = EXIT_OK
@@ -193,6 +206,8 @@ async def run_camera(
             log.info("guarding is now %s", "on" if dc.guarding else "off")
         cfg = dc
         queue.retain(dc.enabled_sounds.__contains__)
+        if not dc.send_snapshots:
+            queue.drop_snapshots()  # queued images are not sent once the household said no
 
     async def watch_stop() -> None:
         await stop.wait()
@@ -219,19 +234,24 @@ async def run_camera(
         assert cfg is not None
         last = last_sent.get(sound)
         if last is not None and t - last < COOLDOWNS_S[sound]:
+            if sound == "lying_still":
+                analyzer.lying.rearm()  # report again on the first frame after the cooldown
             return
         last_sent[sound] = t
-        age = max(0.0, t - frame.captured_at)
-        occurred_at = now() - timedelta(seconds=age)  # the frame's time, not an earlier one
-        snap = encode_snapshot(frame, t) if cfg.send_snapshots else None
+        # The frame's own time, not emit time (inference may have taken a while).
+        age = max(0.0, clock() - frame.captured_at)
+        occurred_at = now() - timedelta(seconds=age)
+        snap = encode_snapshot(frame, clock()) if cfg.send_snapshots else None
         log.info("detected %s (%.2f)%s", sound, conf, " with snapshot" if snap else "")
         queue.put(sound, conf, occurred_at, snap)
 
     async def frame_task() -> None:
+        nonlocal inflight
         src: FrameSource | None = None
         busy = False
         none_since: float | None = None
         warned_model = False
+        open_error: str | None = None
         next_at = clock()
 
         async def lose() -> None:
@@ -255,7 +275,9 @@ async def run_camera(
                     await lose()
                     continue
                 except Exception as e:  # noqa: BLE001 - e.g. a driver error: never crash
-                    log.warning("cannot open the camera (%s)", e)
+                    if open_error != str(e):  # once per state, not every retry
+                        open_error = str(e)
+                        log.warning("cannot open the camera (%s)", e)
                     await lose()
                     continue
             try:
@@ -273,12 +295,17 @@ async def run_camera(
                     await sleep(period)
                 continue
             none_since = None
+            open_error = None
             if busy:
                 busy = False
                 log.info("camera is back")
             if cfg is not None:
                 try:
-                    res = await asyncio.to_thread(analyzer.analyze, frame, cfg, t)
+                    inflight = asyncio.ensure_future(
+                        asyncio.to_thread(analyzer.analyze, frame, cfg, t)
+                    )
+                    inflight.add_done_callback(_consume)
+                    res = await asyncio.shield(inflight)
                     warned_model = False
                 except Exception as e:  # noqa: BLE001 - a model hiccup must not stop heartbeats
                     if not warned_model:
@@ -296,6 +323,7 @@ async def run_camera(
 
     async def heartbeat_task() -> None:
         interval: int | None = None
+        failing = False
         while True:
             try:
                 dc = await client.heartbeat()
@@ -307,14 +335,23 @@ async def run_camera(
                 wait = interval if interval is not None else FIRST_HEARTBEAT_RETRY_S
                 if isinstance(e, RateLimited):
                     wait = max(wait, e.retry_after_s)
-                log.warning("heartbeat failed (%s); retrying in %g s", e, wait)
+                if not failing:  # once per state change, not every retry
+                    failing = True
+                    if interval is None:
+                        log.warning("%s", WAITING_MESSAGE)
+                    else:
+                        log.warning("heartbeat failed (%s); retrying", e)
                 await sleep(wait)
                 continue
+            if failing:
+                failing = False
+                log.info("the server answered")
             set_config(dc)
             interval = max(1, dc.heartbeat_interval_s)
             await sleep(interval)
 
     async def refresh_task() -> None:
+        failing = False
         while True:
             await sleep(config_refresh_s)
             try:
@@ -324,8 +361,11 @@ async def run_camera(
                 fatal(EXIT_REVOKED)
                 return
             except ApiError as e:
-                log.warning("config refresh failed (%s)", e)
+                if not failing:
+                    failing = True
+                    log.warning("config refresh failed (%s)", e)
                 continue
+            failing = False
             set_config(dc)
 
     def allowed(sound: str) -> bool:
@@ -366,9 +406,16 @@ async def run_camera(
         except* _Stopped:
             pass
     finally:
+        # Closing a model while its call runs in a worker thread crashes MediaPipe: wait.
+        running = inflight is not None and not inflight.done()
+        if running:
+            await asyncio.wait({inflight}, timeout=STOP_WAIT_S)
         for s in current:
             _close(s, "camera")
         current.clear()
-        _close(pose, "pose model")
-        _close(objects, "object model")
+        if inflight is not None and not inflight.done():
+            log.warning("a model call is still running; not closing the models")
+        else:
+            _close(pose, "pose model")
+            _close(objects, "object model")
     return code

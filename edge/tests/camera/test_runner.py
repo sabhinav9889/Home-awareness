@@ -15,7 +15,7 @@ from ha_edge.camera import runner
 from ha_edge.camera.capture import CameraBusy, Frame
 from ha_edge.camera.detectors import Detection
 from ha_edge.camera.pose_rules import Landmarks
-from ha_edge.sensor import EXIT_OK, EXIT_REVOKED, REVOKED_MESSAGE
+from ha_edge.sensor import EXIT_OK, EXIT_REVOKED
 
 BASE = "http://srv"
 T0 = datetime(2026, 11, 8, 12, 0, tzinfo=UTC)
@@ -71,10 +71,11 @@ class FakeSource:
         self.closed = 0
         self.reads = 0
         self.none = False
+        self.unplug_at = None
 
     def read(self):
         self.reads += 1
-        if self.none:
+        if self.none or (self.unplug_at is not None and self.ft.t >= self.unplug_at):
             return None
         return Frame(np.full((48, 64, 3), 128, np.uint8), self.ft.t)
 
@@ -277,7 +278,7 @@ async def test_fall_twice_sends_one_within_cooldown(mock):
     (req,) = events(mock)
     assert body(req) == {
         "type": "fall",
-        "confidence": 0.9,
+        "confidence": 1.0,
         "occurred_at": body(req)["occurred_at"],
     }
 
@@ -329,19 +330,18 @@ async def test_frames_stop_for_3s_logs_once_and_reopens(mock, caplog):
 
     def factory():
         s = FakeSource(ft)
+        if not sources:
+            s.unplug_at = 10.0
         sources.append(s)
         return s
 
-    async def unplug():
-        await asyncio.sleep(0.05)
-        sources[0].none = True
-
-    asyncio.create_task(unplug())
-    obj = FakeObjects()
+    obj = FakeObjects([Detection("knife", 0.9)])
     with caplog.at_level(logging.INFO, logger="ha_edge.camera.runner"):
         await run(ft, mock, factory, FakePose(), obj, until=40)
     msgs = [r.getMessage() for r in caplog.records]
-    assert sum("camera busy or unplugged" in m for m in msgs) <= 1
+    assert sum("camera busy or unplugged" in m for m in msgs) == 1
+    assert sum("camera is back" in m for m in msgs) == 1
+    assert len(sources) >= 2
     assert sources[0].closed >= 1
 
 
@@ -353,7 +353,9 @@ async def test_revoked_exits_with_message(mock, caplog):
     with caplog.at_level(logging.ERROR, logger="ha_edge.camera.runner"):
         code = await run(ft, mock, src, pose, obj, until=60)
     assert code == EXIT_REVOKED != 0
-    assert REVOKED_MESSAGE in caplog.text
+    assert "This camera was removed" in caplog.text
+    assert "`ha-camera pair --server URL --code CODE`" in caplog.text
+    assert "ha-sensor" not in caplog.text
     assert src.closed == 1 and pose.closed == 1 and obj.closed == 1
 
 
@@ -431,3 +433,264 @@ async def test_file_source_real_snapshot_and_real_clock(mock, tmp_path):
     assert await task == EXIT_OK
     await client.aclose()
     assert events(mock) and b"\xff\xd8" in events(mock)[0].content
+
+
+# ---- fix round ----
+
+
+async def test_object_and_rule_cooldowns_are_per_type(mock):
+    ft = FakeTime()
+    setup_server(
+        mock, cfg_json(guarding=True, enabled=["person_away", "weapon_seen"], snapshots=False)
+    )
+    obj = FakeObjects([Detection("person", 0.9), Detection("knife", 0.9)])
+    await run(ft, mock, FakeSource(ft), FakePose(), obj, until=5)
+    assert sorted(body(r)["type"] for r in events(mock)) == ["person_away", "weapon_seen"]
+
+
+async def test_queued_person_event_not_sent_after_guarding_goes_off(mock):
+    ft = FakeTime()
+    on = cfg_json(guarding=True, enabled=["person_away"], snapshots=False)
+    off = cfg_json(guarding=False, enabled=["person_away"], snapshots=False)
+    mock.post("/device/heartbeat").respond(200, json=on)
+    mock.get("/device/config").respond(200, json=off)  # first refresh at t=15
+    delivered = []
+
+    def ev(request):
+        if ft.t < 20:
+            return httpx.Response(503)
+        delivered.append(request)
+        return httpx.Response(202, json={"event_id": 1, "merged": False, "alerts": 0})
+
+    mock.post("/device/events").mock(side_effect=ev)
+    await run(
+        ft, mock, FakeSource(ft), FakePose(), FakeObjects([Detection("person", 0.9)]), until=40
+    )
+    assert delivered == []
+
+
+async def test_snapshot_flip_at_refresh_applies_to_next_event(mock):
+    ft = FakeTime()
+    on = cfg_json(enabled=["weapon_seen"], snapshots=True)
+    off = cfg_json(enabled=["weapon_seen"], snapshots=False)
+    setup_server(mock, on, [off])  # heartbeat (hb=3600) says on; refresh at 15 says off
+    await run(
+        ft, mock, FakeSource(ft), FakePose(), FakeObjects([Detection("knife", 0.9)]), until=310
+    )
+    first, second = events(mock)
+    assert first.headers["content-type"].startswith("multipart/form-data")
+    assert second.headers["content-type"] == "application/json"
+
+
+async def test_snapshot_flip_off_strips_images_from_queued_events(mock):
+    ft = FakeTime()
+    on = cfg_json(enabled=["weapon_seen"], snapshots=True)
+    off = cfg_json(enabled=["weapon_seen"], snapshots=False)
+    setup_server(mock, on, [off])
+    types = []
+
+    def ev(request):
+        if ft.t < 20:
+            return httpx.Response(429, headers={"Retry-After": "8"})  # keeps the image
+        types.append(request.headers["content-type"])
+        return httpx.Response(202, json={"event_id": 1, "merged": False, "alerts": 0})
+
+    mock.post("/device/events").mock(side_effect=ev)
+    await run(
+        ft, mock, FakeSource(ft), FakePose(), FakeObjects([Detection("knife", 0.9)]), until=40
+    )
+    assert types == ["application/json"]
+
+
+async def test_occurred_at_is_the_frame_time_with_slow_inference(mock):
+    ft = FakeTime()
+    setup_server(mock, cfg_json(enabled=["weapon_seen"], snapshots=False))
+    captured = []
+
+    class Src(FakeSource):
+        def read(self):
+            f = super().read()
+            captured.append(f.captured_at)
+            return f
+
+    class Slow(FakeObjects):
+        def detect(self, frame):
+            ft.t += 0.1  # inference takes 0.1 s
+            return super().detect(frame)
+
+    await run(ft, mock, Src(ft), FakePose(), Slow([Detection("knife", 0.9)]), until=3)
+    (req,) = events(mock)
+    at = datetime.fromisoformat(body(req)["occurred_at"])
+    assert (at - T0).total_seconds() in captured  # a frame time, not emit time (+0.1)
+
+
+async def test_inference_runs_off_the_event_loop_so_heartbeats_continue(mock):
+    import threading
+    import time
+
+    beats, window = [], []
+
+    def hb(request):
+        beats.append(time.monotonic())
+        return httpx.Response(200, json=cfg_json(enabled=["weapon_seen"], snapshots=False, hb=1))
+
+    mock.post("/device/heartbeat").mock(side_effect=hb)
+    mock.get("/device/config").respond(200, json=cfg_json(enabled=["weapon_seen"]))
+    mock.post("/device/events").respond(202, json={"event_id": 1, "merged": False, "alerts": 0})
+
+    class Slow(FakeObjects):
+        def detect(self, frame):
+            window.append(time.monotonic())
+            time.sleep(1.5)
+            window.append(time.monotonic())
+            return []
+
+    assert threading
+    ft = FakeTime()
+    stop = asyncio.Event()
+    client = ServerClient(BASE, "key")
+    task = asyncio.create_task(
+        runner.run_camera(client, FakeSource(ft), FakePose(), Slow(), fps=4, stop=stop)
+    )
+    await asyncio.sleep(2.2)
+    stop.set()
+    await task
+    await client.aclose()
+    start, end = window[0], window[1]
+    assert any(start + 0.1 < b < end - 0.3 for b in beats), (beats, window)
+
+
+class BlockingObjects(FakeObjects):
+    def __init__(self):
+        import threading
+
+        super().__init__([])
+        self.entered = threading.Event()
+        self.gate = threading.Event()
+        self.returned = False
+
+    def detect(self, frame):
+        self.entered.set()
+        self.gate.wait(10)
+        self.returned = True
+        return []
+
+    def close(self):
+        assert self.returned, "closed while detect was still running"
+        super().close()
+
+
+async def _start_blocking(mock):
+    ft = FakeTime()
+    setup_server(mock, cfg_json(enabled=["weapon_seen"]))
+    obj = BlockingObjects()
+    stop = asyncio.Event()
+    client = ServerClient(BASE, "key")
+    pose, src = FakePose(), FakeSource(ft)
+    task = asyncio.create_task(
+        runner.run_camera(
+            client, src, pose, obj, clock=ft.clock, now=ft.now, sleep=ft.sleep, stop=stop
+        )
+    )
+    for _ in range(400):
+        if obj.entered.is_set():
+            break
+        await asyncio.sleep(0.005)
+    assert obj.entered.is_set()
+    return task, stop, obj, pose, src, client
+
+
+async def test_models_not_closed_until_inflight_inference_returns(mock):
+    task, stop, obj, pose, src, client = await _start_blocking(mock)
+    stop.set()
+    await asyncio.sleep(0.2)
+    assert not task.done() and obj.closed == 0 and pose.closed == 0
+    obj.gate.set()
+    assert await task == EXIT_OK
+    await client.aclose()
+    assert (obj.closed, pose.closed, src.closed) == (1, 1, 1)
+
+
+async def test_stuck_inference_times_out_and_skips_closing_models(mock, monkeypatch, caplog):
+    monkeypatch.setattr(runner, "STOP_WAIT_S", 0.1)
+    task, stop, obj, pose, src, client = await _start_blocking(mock)
+    with caplog.at_level(logging.WARNING, logger="ha_edge.camera.runner"):
+        stop.set()
+        assert await asyncio.wait_for(task, 3) == EXIT_OK
+    assert obj.closed == 0 and pose.closed == 0 and src.closed == 1
+    assert "not closing the models" in caplog.text
+    obj.gate.set()
+    await client.aclose()
+
+
+async def test_revoke_also_waits_for_inflight_inference(mock):
+    ft = FakeTime()
+    mock.post("/device/heartbeat").mock(
+        side_effect=lambda r: httpx.Response(200, json=cfg_json(enabled=["weapon_seen"]))
+    )
+    mock.get("/device/config").respond(401)
+    obj = BlockingObjects()
+    stop = asyncio.Event()
+    client = ServerClient(BASE, "key")
+    task = asyncio.create_task(
+        runner.run_camera(client, FakeSource(ft), FakePose(), obj, config_refresh_s=0.05, stop=stop)
+    )
+    for _ in range(400):
+        if obj.entered.is_set():
+            break
+        await asyncio.sleep(0.005)
+    await asyncio.sleep(0.3)  # the refresh gets 401 meanwhile
+    assert not task.done()
+    obj.gate.set()
+    assert await asyncio.wait_for(task, 3) == EXIT_REVOKED
+    await client.aclose()
+
+
+async def test_lying_still_rearmed_when_cooldown_suppresses_it(mock):
+    ft = FakeTime()
+    setup_server(mock, cfg_json(enabled=["lying_still"], snapshots=False))
+
+    def script(_):
+        t = ft.t
+        return lm("upright") if 200 <= t < 210 else lm("down")
+
+    await run(ft, mock, FakeSource(ft), FakePose(script), FakeObjects(), until=740, fps=1)
+    ats = sorted(
+        (datetime.fromisoformat(body(r)["occurred_at"]) - T0).total_seconds() for r in events(mock)
+    )
+    assert len(ats) == 2
+    assert 118 <= ats[0] <= 125 and ats[1] >= 720  # second goes out once 600 s have passed
+
+
+async def test_heartbeat_failures_log_once_per_state(mock, caplog):
+    ft = FakeTime()
+    n = []
+
+    def hb(request):
+        n.append(ft.t)
+        if len(n) <= 5:
+            return httpx.Response(503)
+        return httpx.Response(200, json=cfg_json(hb=3600))
+
+    mock.post("/device/heartbeat").mock(side_effect=hb)
+    mock.get("/device/config").respond(200, json=cfg_json())
+    with caplog.at_level(logging.INFO, logger="ha_edge.camera.runner"):
+        await run(ft, mock, FakeSource(ft), FakePose(), FakeObjects(), until=40)
+    msgs = [r.getMessage() for r in caplog.records]
+    assert sum("waiting for the server; detection starts when it answers" in m for m in msgs) == 1
+    assert not any("heartbeat failed" in m for m in msgs)
+
+
+async def test_open_error_logged_once(mock, caplog):
+    ft = FakeTime()
+    setup_server(mock, cfg_json())
+    calls = []
+
+    def factory():
+        calls.append(1)
+        raise RuntimeError("driver exploded")
+
+    with caplog.at_level(logging.INFO, logger="ha_edge.camera.runner"):
+        await run(ft, mock, factory, FakePose(), FakeObjects(), until=40)
+    assert len(calls) >= 5
+    assert sum("driver exploded" in r.getMessage() for r in caplog.records) == 1

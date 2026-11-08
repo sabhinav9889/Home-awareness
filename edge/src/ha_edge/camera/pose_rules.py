@@ -116,6 +116,10 @@ class LyingStillDetector:
     def _reset(self) -> None:
         self._anchor = None
 
+    def rearm(self) -> None:
+        """Let the next still-lying frame report again (the caller held the last report back)."""
+        self._armed = True
+
     def update(self, sample: TorsoSample | None, t: float | None = None) -> bool:
         if sample is None:
             if t is not None and self._last_t is not None and t - self._last_t > self.gap_reset_s:
