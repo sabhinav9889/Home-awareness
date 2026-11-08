@@ -6,6 +6,7 @@ The queue is memory-only by design (privacy and simplicity).
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections import deque
@@ -21,6 +22,9 @@ log = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_S = 10.0
 DEFAULT_RETRY_AFTER_S = 1.0
 MAX_QUEUE_ITEMS = 500
+MAX_QUEUED_IMAGES = 5  # snapshots held in memory at once; the oldest lose theirs first
+MAX_IMAGE_SEND_FAILURES = 3  # failed sends after which an event goes without its image
+MAX_IMAGE_AGE_S = 60.0  # an event older than this goes without its image
 REJECT_LOG_EVERY_S = 600.0  # the same rejection reason is logged at most every 10 minutes
 SKEW_TEXT = "10 minutes"  # the server's occurred_at skew check (app/events/schemas.py)
 CLOCK_SKEW_MESSAGE = "This laptop's clock is more than 10 minutes off — fix the system time"
@@ -64,6 +68,9 @@ class DeviceConfig:
     # Per-sound minimum confidence; empty from servers that predate thresholds, in which
     # case the detector's global default applies.
     thresholds: Mapping[str, float] = field(default_factory=dict)
+    # Camera clients only; absent from servers that predate them (ha-sensor ignores both).
+    guarding: bool = False
+    send_snapshots: bool = True
 
     def __post_init__(self) -> None:  # read-only copy: the config is shared across tasks
         object.__setattr__(self, "thresholds", MappingProxyType(dict(self.thresholds)))
@@ -134,10 +141,19 @@ class ServerClient:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def _post(self, path: str, body: dict | None = None, auth: bool = True) -> httpx.Response:
+    async def _post(
+        self,
+        path: str,
+        body: dict | None = None,
+        auth: bool = True,
+        files: dict | None = None,
+    ) -> httpx.Response:
         headers = {"X-Device-Key": self._key} if auth and self._key else {}
         try:
-            resp = await self._http.post(self._base + path, json=body, headers=headers)
+            if files is not None:
+                resp = await self._http.post(self._base + path, files=files, headers=headers)
+            else:
+                resp = await self._http.post(self._base + path, json=body, headers=headers)
         except httpx.HTTPError as e:
             # type name only: keep URLs/headers out of the message
             raise ServerUnavailable(type(e).__name__) from None
@@ -189,13 +205,25 @@ class ServerClient:
         try:
             data = resp.json()
             thresholds = _thresholds(data.get("thresholds", {}))
+            guarding = data.get("guarding")
+            send_snapshots = data.get("send_snapshots")
             return DeviceConfig(
-                frozenset(data["enabled_sounds"]), int(data["heartbeat_interval_s"]), thresholds
+                frozenset(data["enabled_sounds"]),
+                int(data["heartbeat_interval_s"]),
+                thresholds,
+                guarding if isinstance(guarding, bool) else False,
+                send_snapshots if isinstance(send_snapshots, bool) else True,
             )
         except (ValueError, KeyError, TypeError, AttributeError):
             raise ServerUnavailable(f"malformed {what} response") from None
 
-    async def send_event(self, sound: str, confidence: float, occurred_at: datetime) -> EventResult:
+    async def send_event(
+        self,
+        sound: str,
+        confidence: float,
+        occurred_at: datetime,
+        snapshot: bytes | None = None,
+    ) -> EventResult:
         if occurred_at.utcoffset() is None:
             raise ValueError("occurred_at must be timezone-aware")
         body = {
@@ -203,7 +231,19 @@ class ServerClient:
             "confidence": confidence,
             "occurred_at": occurred_at.isoformat(),
         }
-        resp = await self._post("/device/events", body)
+        if snapshot is None:
+            resp = await self._post("/device/events", body)
+        else:
+            # Same JSON in an `event` part; httpx sets Content-Length (the server needs it).
+            files = {
+                "event": (
+                    None,
+                    json.dumps(body, separators=(",", ":")).encode(),
+                    "application/json",
+                ),
+                "snapshot": ("snapshot.jpg", snapshot, "image/jpeg"),
+            }
+            resp = await self._post("/device/events", files=files)
         if resp.status_code != 202:
             raise _rejected(resp)
         # 202 means the server accepted the event. If the body is unreadable, still report
@@ -215,11 +255,13 @@ class ServerClient:
             return EventResult(-1, False, 0)
 
 
-@dataclass(frozen=True)
+@dataclass
 class _Pending:
     sound: str
     confidence: float
     occurred_at: datetime
+    snapshot: bytes | None = None  # memory only, never logged
+    failures: int = 0  # failed sends that carried the snapshot
 
 
 class EventQueue:
@@ -271,10 +313,15 @@ class EventQueue:
     def oldest_occurred_at(self) -> datetime | None:
         return self._items[0].occurred_at if self._items else None
 
-    def put(self, sound: str, conf: float, occurred_at: datetime) -> None:
+    def put(
+        self, sound: str, conf: float, occurred_at: datetime, snapshot: bytes | None = None
+    ) -> None:
         if occurred_at.utcoffset() is None:
             raise ValueError("occurred_at must be timezone-aware")
-        self._items.append(_Pending(sound, conf, occurred_at))
+        self._items.append(_Pending(sound, conf, occurred_at, snapshot or None))
+        with_image = [i for i in self._items if i.snapshot is not None]
+        for old in with_image[: max(0, len(with_image) - MAX_QUEUED_IMAGES)]:
+            old.snapshot = None
         while len(self._items) > self._max_items:
             self._items.popleft()
             if not self._overflow_logged:
@@ -289,6 +336,24 @@ class EventQueue:
         # A put() during an awaited send may have evicted this item at the cap.
         if self._items and self._items[0] is item:
             self._items.popleft()
+
+    async def _send_with_image(self, client: ServerClient, item: _Pending) -> None:
+        """Send with the snapshot. A 4xx (too big, bad image, ...) means the server refused
+        this version, so the same event goes once more without it. Any other failure counts
+        against the image; after MAX_IMAGE_SEND_FAILURES the image is dropped, the event kept."""
+        assert item.snapshot is not None
+        try:
+            await client.send_event(
+                item.sound, item.confidence, item.occurred_at, snapshot=item.snapshot
+            )
+        except Rejected:
+            item.snapshot = None  # refused: never offered again, so no duplicate delivery
+            await client.send_event(item.sound, item.confidence, item.occurred_at)
+        except (ServerUnavailable, RateLimited):
+            item.failures += 1
+            if item.failures >= MAX_IMAGE_SEND_FAILURES:
+                item.snapshot = None
+            raise
 
     async def drain(
         self,
@@ -312,8 +377,15 @@ class EventQueue:
             if allow is not None and not allow(item.sound):
                 self._pop_if_head(item)
                 continue
+            if item.snapshot is not None and now - item.occurred_at > timedelta(
+                seconds=MAX_IMAGE_AGE_S
+            ):
+                item.snapshot = None  # too old to be useful: send the event alone
             try:
-                await client.send_event(item.sound, item.confidence, item.occurred_at)
+                if item.snapshot is None:
+                    await client.send_event(item.sound, item.confidence, item.occurred_at)
+                else:
+                    await self._send_with_image(client, item)
             except Rejected as e:
                 self._pop_if_head(item)
                 self._log_rejected(item.sound, e, client)
