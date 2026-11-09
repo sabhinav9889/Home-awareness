@@ -6,14 +6,13 @@ refused.
 """
 
 import argparse
+import base64
 import contextlib
 import os
 import secrets
 import sys
 import tempfile
 from pathlib import Path
-
-from cryptography.fernet import Fernet
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE = ROOT / "deploy" / ".env.prod.example"
@@ -24,7 +23,9 @@ def generate() -> dict[str, str]:
     return {
         "POSTGRES_PASSWORD": secrets.token_urlsafe(32),
         "JWT_SECRET": secrets.token_urlsafe(48),
-        "SNAPSHOT_KEY": Fernet.generate_key().decode(),
+        "SNAPSHOT_KEY": base64.urlsafe_b64encode(
+            os.urandom(32)
+        ).decode(),  # a valid Fernet key is 32 random bytes
     }
 
 

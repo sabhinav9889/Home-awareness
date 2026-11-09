@@ -191,13 +191,10 @@ message says what it found; send it to the assistant (section 14).
 ## 6. Secrets and configuration
 
 `scripts/gen_secrets.py` writes `deploy/.env.prod` with fresh random secrets (mode 0600) and
-prints only the file path. It imports `cryptography` (for the Fernet snapshot key), which a fresh
-Ubuntu does not have, so plain `python3 scripts/gen_secrets.py` (the command the bootstrap
-script prints) fails with `ModuleNotFoundError: No module named 'cryptography'`. Install the
-Ubuntu package first; the rest of the script uses only the standard library:
+prints only the file path. It uses only the Python standard library, so it runs on a fresh
+Ubuntu with the system `python3` (the command the bootstrap script prints):
 
 ```bash
-sudo apt-get install -y python3-cryptography
 cd ~/home-awareness
 python3 scripts/gen_secrets.py
 ```
