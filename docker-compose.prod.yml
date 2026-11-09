@@ -74,7 +74,27 @@ services:
   beat:
     environment: *prod-env
     logging: *logging
+  # Nightly pg_dump at 03:30 UTC (see deploy/README.md). The postgres image only supplies
+  # pg_dump, psql, gzip and bash; its own entrypoint is replaced so no server is started here.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    entrypoint: ["bash", "/deploy/backup.sh", "--daemon"]
+    environment:
+      PGHOST: db
+      PGUSER: home
+      PGDATABASE: home
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env.prod}
+      BACKUP_DIR: /backups
+    volumes:
+      - backups:/backups
+      - ./deploy/backup.sh:/deploy/backup.sh:ro
+      - ./deploy/restore.sh:/deploy/restore.sh:ro
+    depends_on:
+      db: {condition: service_healthy}
+    logging: *logging
 
 volumes:
+  backups:
   caddy_data:
   caddy_config:
