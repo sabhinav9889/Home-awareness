@@ -4,6 +4,7 @@ Git is the real binary but only ever runs inside throwaway repositories under tm
 The real Docker daemon, the network and SSH are never used.
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -21,6 +22,9 @@ BASE_PATH = "/usr/bin:/bin"
 DOCKER_STUB = r"""#!/usr/bin/env bash
 head=$(git rev-parse --short HEAD 2>/dev/null || echo none)
 echo "docker $* @$head" >> "$STUB_DIR/calls.log"
+if [[ " $* " == *" version "* ]]; then
+  cat "$STUB_DIR/compose_version" 2>/dev/null || echo "v2.30.0"
+fi
 if [ -f "$STUB_DIR/slow" ] && [[ " $* " == *" build "* ]]; then sleep 2; fi
 if [ -f "$STUB_DIR/docker_fail" ]; then
   while read -r sha pat; do
@@ -203,7 +207,9 @@ def test_healthy_deploy_updates_last_good(sb: Sandbox) -> None:
         "--env-file deploy/.env.prod -p home-awareness"
     )
     docker_calls = [c for c in calls if c.startswith("docker ")]
-    assert all(c.startswith(compose) or "image prune" in c for c in docker_calls), docker_calls
+    assert all(
+        c.startswith(compose) or "image prune" in c or "compose version" in c for c in docker_calls
+    ), docker_calls
     assert index(calls, " build") < index(calls, "run --rm migrate") < index(calls, " up -d --wait")
     assert "docker image prune -f" in " ".join(calls)
     assert not any("system prune" in c or "--all" in c or "prune -a" in c for c in calls)
@@ -266,6 +272,11 @@ def test_unhealthy_new_version_rolls_back(sb: Sandbox) -> None:
     calls = sb.calls()
     ups = [c for c in calls if " up -d" in c]
     assert len(ups) == 2 and ups[1].endswith(f"@{sb.base[:7]}")
+    assert "--no-deps" in ups[1] and f"api worker beat @{sb.base[:7]}" in ups[1]
+    assert " caddy" not in ups[1] and " db" not in ups[1]
+    assert len([c for c in calls if "run --rm migrate" in c]) == 1, "rollback must not migrate"
+    rebuilds = [c for c in calls if c.endswith(f"build api worker beat @{sb.base[:7]}")]
+    assert rebuilds, calls
     # health was checked again after the rollback (the old version is also verified)
     assert any(c.startswith("curl") for c in calls[calls.index(ups[1]) :])
 
@@ -277,6 +288,8 @@ def test_rollback_that_is_unhealthy_reports_failure(sb: Sandbox) -> None:
     r = sb.run(new)
     assert r.returncode != 0
     assert "ROLLBACK FAILED, manual action needed" in out(r)
+    assert "checked out" in out(r) and sb.base in out(r)
+    assert any("ps --format" in c for c in sb.calls())
     assert "ROLLED BACK" not in out(r)
     assert sb.last_good.read_text().strip() == sb.base
 
@@ -300,8 +313,23 @@ def test_first_deploy_failure_does_not_roll_back(sb: Sandbox) -> None:
     assert "first deploy" in out(r).lower()
     calls = sb.calls()
     assert len([c for c in calls if " up -d" in c]) == 1
-    assert any(" stop" in c for c in calls)
+    stops = [c for c in calls if " stop" in c]
+    assert stops and all(
+        c.split("stop", 1)[1].split("@")[0].split() == ["api", "worker", "beat"] for c in stops
+    )
     assert not sb.last_good.exists()
+
+
+def test_first_automatic_deploy_after_manual_bootstrap_rolls_back(sb: Sandbox) -> None:
+    """No .last_good, but the stack was healthy before the switch: that is the rollback target."""
+    assert not sb.last_good.exists()
+    new = sb.push({"app.txt": "v2\n"}, "v2")
+    sb.set_file("unhealthy", new + "\n")  # the old (checked-out) version is healthy
+    r = sb.run(new)
+    assert r.returncode != 0
+    assert f"ROLLED BACK to {sb.base}" in out(r)
+    assert sb.head() == sb.base
+    assert not any(" stop" in c for c in sb.calls()), "a healthy production must not be stopped"
 
 
 def test_rollback_warns_about_forward_only_migrations(sb: Sandbox) -> None:
@@ -386,13 +414,122 @@ def test_valid_ref_shapes_are_accepted(sb: Sandbox, good: str) -> None:
     assert r.returncode == 0, out(r)
 
 
-def test_refuses_non_fast_forward(sb: Sandbox) -> None:
+def test_older_sha_after_newer_is_a_green_noop(sb: Sandbox) -> None:
     new = sb.push({"app.txt": "v2\n"}, "v2")
     assert sb.run(new).returncode == 0
+    sb.set_file("calls.log", "")
     r = sb.run(sb.base)
+    assert r.returncode == 0, out(r)
+    assert "already at a newer commit, nothing to do" in out(r)
+    assert sb.head() == new
+    assert not any(" build" in c for c in sb.calls())
+
+
+def test_refuses_non_fast_forward(sb: Sandbox) -> None:
+    new = sb.push({"app.txt": "v2\n"}, "v2")
+    git(sb.dev, "checkout", "-q", "-b", "alt", sb.base)
+    (sb.dev / "other.txt").write_text("x\n")
+    git(sb.dev, "add", "-A")
+    git(sb.dev, "commit", "-q", "-m", "diverged")
+    alt = git(sb.dev, "rev-parse", "HEAD")
+    git(sb.dev, "push", "-q", "origin", "HEAD:refs/heads/alt")
+    assert sb.run(new).returncode == 0
+    r = sb.run(alt)
     assert r.returncode != 0
     assert "fast-forward" in out(r).lower()
     assert sb.head() == new
+    # an older commit while HEAD is not the last good one is also refused, not a no-op
+    sb.last_good.write_text(sb.base + "\n")
+    assert sb.run(sb.base).returncode != 0
+
+
+def test_refuses_dirty_tracked_files(sb: Sandbox) -> None:
+    new = sb.push({"app.txt": "v2\n"}, "v2")
+    (sb.repo / "docker-compose.yml").write_text("services: {a: {}}\n")
+    r = sb.run(new)
+    assert r.returncode != 0
+    assert "local modifications" in out(r)
+    assert not any(" build" in c or " up " in c for c in sb.calls())
+    assert sb.head() == sb.base
+
+
+def test_fetch_failure_is_reported(sb: Sandbox) -> None:
+    git(sb.repo, "remote", "set-url", "origin", str(sb.root / "does-not-exist.git"))
+    r = sb.run(sb.base)
+    assert r.returncode != 0
+    assert "deploy:" in r.stderr and "fetch" in r.stderr.lower()
+
+
+def test_old_compose_is_refused_early(sb: Sandbox) -> None:
+    sb.set_file("compose_version", "v2.20.1\n")
+    new = sb.push({"app.txt": "v2\n"}, "v2")
+    r = sb.run(new)
+    assert r.returncode != 0
+    assert "2.24" in out(r)
+    assert not any(" build" in c for c in sb.calls())
+
+
+def test_build_and_migrate_failures_warn_about_image_tags(sb: Sandbox) -> None:
+    new = sb.push({"app.txt": "v2\n"}, "v2")
+    sb.set_file("docker_fail", f"{new} build\n")
+    assert "image tags" in out(sb.run(new))
+
+
+def test_health_check_resolves_domain_locally_by_default(sb: Sandbox) -> None:
+    new = sb.push({"app.txt": "v2\n"}, "v2")
+    assert sb.run(new).returncode == 0
+    health = next(c for c in sb.calls() if c.startswith("curl"))
+    assert "--resolve deploy.example.test:443:127.0.0.1" in health
+    assert "https://deploy.example.test/health" in health
+
+
+def test_survives_a_closed_stdout(sb: Sandbox) -> None:
+    """An SSH drop must not kill the script mid-switch (SIGPIPE/SIGHUP are ignored)."""
+    new = sb.push({"app.txt": "v2\n"}, "v2")
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)
+    proc = subprocess.run(
+        ["bash", "deploy/deploy.sh", new],
+        cwd=sb.repo,
+        env=sb.env(),
+        stdout=write_fd,
+        stderr=write_fd,
+        timeout=60,
+    )
+    os.close(write_fd)
+    assert proc.returncode == 0
+    assert sb.last_good.read_text().strip() == new
+
+
+def test_survives_a_closed_stdout_during_rollback(sb: Sandbox) -> None:
+    sb.last_good.write_text(sb.base + "\n")
+    new = sb.push({"app.txt": "v2\n"}, "v2")
+    sb.set_file("unhealthy", new + "\n")
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)
+    proc = subprocess.run(
+        ["bash", "deploy/deploy.sh", new],
+        cwd=sb.repo,
+        env=sb.env(),
+        stdout=write_fd,
+        stderr=write_fd,
+        timeout=60,
+    )
+    os.close(write_fd)
+    assert proc.returncode == 1
+    assert sb.head() == sb.base
+    assert any(c.startswith("docker") and "--no-deps" in c for c in sb.calls())
+
+
+def test_gitignore_covers_runtime_files() -> None:
+    for name in (
+        "deploy/.last_good",
+        "deploy/.last_good.tmp",
+        "deploy/.deploy.lock",
+        "deploy/last-deploy.log",
+    ):
+        r = subprocess.run(["git", "check-ignore", "-q", name], cwd=ROOT)
+        assert r.returncode == 0, name
 
 
 def test_missing_env_file_fails_clearly(sb: Sandbox) -> None:
@@ -460,6 +597,7 @@ def test_workflow_only_runs_for_verified_main() -> None:
     assert "workflow_run.conclusion == 'success'" in cond
     assert "workflow_run.head_branch == 'main'" in cond
     assert "refs/heads/main" in cond  # manual runs only from main
+    assert "head_repository.full_name == github.repository" in cond
 
 
 def test_workflow_uses_ci_verified_sha_via_env() -> None:
@@ -496,6 +634,16 @@ def test_workflow_ssh_is_pinned_and_strict() -> None:
     assert "chmod 600" in text and "trap" in text and "rm -f" in text
     assert "set -x" not in text and 'echo "$DEPLOY_SSH_KEY' not in text
     assert "./deploy/deploy.sh" in text
+
+
+def test_workflow_detaches_the_remote_run_from_the_ssh_session() -> None:
+    text = _workflow_text()
+    assert "setsid -w nohup ./deploy/deploy.sh" in text
+    assert ">deploy/last-deploy.log 2>&1 </dev/null" in text
+    assert "cat deploy/last-deploy.log" in text
+    assert "\\$HOME" in text, "a leading ~/ in DEPLOY_PATH expands on the remote side"
+    assert "workflow_dispatch" in text and "not necessarily CI-green" in text
+    assert "one pending" in text
 
 
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")

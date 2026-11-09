@@ -11,3 +11,5 @@ deploy/.env.prod*
 !deploy/.env.prod.example
 deploy/.last_good
 deploy/.deploy.lock
+deploy/.last_good.tmp
+deploy/last-deploy.log

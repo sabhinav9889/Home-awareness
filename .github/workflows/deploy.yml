@@ -11,7 +11,11 @@ on:
 permissions:
   contents: read
 
-# One deploy at a time; a running deploy is never cancelled halfway.
+# One deploy at a time; a running deploy is never cancelled halfway. GitHub keeps only one pending
+# run, so an older run that queues later can replace a newer pending one: the newest commit is
+# then deployed by the next push or by a manual dispatch.
+# workflow_dispatch deploys the tip of main (not necessarily CI-green) and is limited to people
+# with write access to the repository.
 concurrency:
   group: deploy
   cancel-in-progress: false
@@ -23,7 +27,8 @@ jobs:
       (github.event_name == 'workflow_run'
         && github.event.workflow_run.conclusion == 'success'
         && github.event.workflow_run.head_branch == 'main'
-        && github.event.workflow_run.event == 'push')
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -73,7 +78,16 @@ jobs:
           printf '%s\n' "$DEPLOY_SSH_KEY" > "$key"
           chmod 600 "$key"
           printf '%s\n' "$DEPLOY_HOST_KEY" > "$known"
-          remote="cd $(printf '%q' "$DEPLOY_PATH") && ./deploy/deploy.sh $DEPLOY_SHA"
+          # A leading ~/ must expand on the remote side, not be quoted away.
+          case "$DEPLOY_PATH" in
+            "~/"*) path_q="\"\$HOME\"/$(printf '%q' "${DEPLOY_PATH#\~/}")" ;;
+            *) path_q="$(printf '%q' "$DEPLOY_PATH")" ;;
+          esac
+          # The deploy runs detached (own session, output to a log) so an SSH drop or a
+          # cancelled job cannot kill it half-way through the switch. The sha is validated.
+          remote="cd $path_q && setsid -w nohup ./deploy/deploy.sh $DEPLOY_SHA"
+          remote="$remote >deploy/last-deploy.log 2>&1 </dev/null; rc=\$?"
+          remote="$remote; cat deploy/last-deploy.log; exit \$rc"
           ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
             -o ConnectTimeout=20 -o ServerAliveInterval=30 \
