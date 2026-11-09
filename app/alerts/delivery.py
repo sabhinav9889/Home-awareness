@@ -19,6 +19,7 @@ from app.households.models import Household
 from app.households.timezone import tz_label
 from app.live.hub import publish_to_member
 from app.metrics import DELIVERIES
+from app.rooms.models import Room
 from app.rules.models import AlertPreference
 from app.snapshots import store
 from app.snapshots.models import Snapshot
@@ -162,6 +163,7 @@ async def _deliver_claimed(
     topic = prefs.ntfy_topic if prefs else None
 
     device_name = "a removed sensor"
+    room_name: str | None = None
     jpeg: bytes | None = None
     if alert.event_id is not None:
         jpeg = await store.try_load(
@@ -172,6 +174,9 @@ async def _deliver_claimed(
         if event is not None and event.device_id is not None:
             device = await session.scalar(tenant.select(Device).where(Device.id == event.device_id))
             device_name = device.name if device else device_name
+            if device is not None and device.room_id is not None:
+                room = await session.scalar(tenant.select(Room).where(Room.id == device.room_id))
+                room_name = room.name if room else None
     at = alert.created_at.astimezone(UTC)
     household_tz = await session.scalar(
         select(Household.timezone).where(Household.id == alert.household_id)
@@ -183,7 +188,8 @@ async def _deliver_claimed(
         sound = get_sound(alert.sound_key)
         label, urgent = sound.label, sound.severity == "urgent"
         hhmm, tz = tz_label(at, household_tz)
-        text = f"⚠️ {label} detected by {device_name} at {hhmm} {tz} — Home Awareness"
+        where = f"{device_name} in {room_name}" if room_name else device_name
+        text = f"⚠️ {label} detected by {where} at {hhmm} {tz} — Home Awareness"
 
     Send = Callable[[], Awaitable[object]]
     plan: list[tuple[Delivery, Send | None]] = []  # None: nothing to send (pre-failed)
@@ -207,6 +213,7 @@ async def _deliver_claimed(
                     "sound_key": alert.sound_key,
                     "label": label,
                     "device_name": device_name,
+                    "room_name": room_name,
                     "at": at.isoformat(),
                     "popup": popup,
                     "alarm": alarm,

@@ -161,6 +161,7 @@ async def test_history_newest_first_paginated_and_scoped(client, signed_up, two_
         "sound_key",
         "label",
         "device_name",
+        "room_name",
         "confidence",
         "received_at",
         "merged",
@@ -218,3 +219,57 @@ async def test_household_event_rate_limit_301st_429(client, signed_up, frozen_ra
     _, h_other = await signed_up(email="other@example.com", household_name="Other")
     _, dk_other = await _device(client, h_other)
     assert (await client.post("/device/events", json=_body(), headers=dk_other)).status_code == 202
+
+
+async def test_room_name_in_live_event_and_list(client, signed_up, monkeypatch):
+    _, h = await signed_up()
+    room = (
+        await client.post("/rooms", json={"name": "Kitchen", "kind": "common"}, headers=h)
+    ).json()
+    r = await client.post(
+        "/devices/pairing-codes",
+        json={"name": "Mic", "kind": "laptop", "room_id": room["id"]},
+        headers=h,
+    )
+    paired = await client.post("/device/pair", json={"code": r.json()["code"]})
+    dk = {"X-Device-Key": paired.json()["device_key"]}
+    published = []
+
+    async def fake_publish(redis, household_id, msg):
+        published.append(msg)
+
+    monkeypatch.setattr(events_router, "publish_to_household", fake_publish)
+    assert (await client.post("/device/events", json=_body(), headers=dk)).status_code == 202
+    assert published[0]["room_name"] == "Kitchen"
+    assert (await client.get("/events", headers=h)).json()[0]["room_name"] == "Kitchen"
+    # room deleted afterwards: the history row shows no room
+    assert (await client.delete(f"/rooms/{room['id']}", headers=h)).status_code == 204
+    assert (await client.get("/events", headers=h)).json()[0]["room_name"] is None
+
+
+async def test_room_absent_and_cross_household(client, signed_up, session, monkeypatch):
+    from app.devices.models import Device
+    from app.rooms.models import Room
+
+    a, h_a = await signed_up(email="a@example.com", household_name="A")
+    b, _ = await signed_up(email="b@example.com", household_name="B")
+    device_id, dk = await _device(client, h_a, name="Hall")
+    published = []
+
+    async def fake_publish(redis, household_id, msg):
+        published.append(msg)
+
+    monkeypatch.setattr(events_router, "publish_to_household", fake_publish)
+    await client.post("/device/events", json=_body(), headers=dk)
+    assert published[0]["room_name"] is None  # no room assigned
+    secret = Room(household_id=b.household_id, name="B secret", kind="common")
+    session.add(secret)
+    await session.flush()
+    dev = await session.get(Device, device_id)
+    dev.room_id = secret.id  # corrupt cross-household link
+    await session.flush()
+    await client.post("/device/events", json=_body(), headers=dk)
+    assert published[1]["room_name"] is None
+    rows = (await client.get("/events", headers=h_a)).json()
+    assert all(e["room_name"] is None for e in rows)
+    assert "B secret" not in str(published)

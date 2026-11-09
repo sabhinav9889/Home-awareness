@@ -52,6 +52,7 @@ class EventOut(BaseModel):
     sound_key: str
     label: str
     device_name: str | None
+    room_name: str | None
     confidence: float
     received_at: datetime
     merged: bool = Field(description=MERGED_DOC)

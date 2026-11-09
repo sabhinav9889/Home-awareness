@@ -13,6 +13,7 @@ from app.alerts.delivery import deliver_alert
 from app.alerts.models import Alert, Delivery
 from app.devices.models import Device
 from app.events.models import Event
+from app.rooms.models import Room
 from app.rules.models import AlertPreference
 
 TOKEN = "123:SECRET-TOKEN"
@@ -89,12 +90,13 @@ async def _prefs(session, member, **kw):
     await session.flush()
 
 
-async def _alert(session, member, *, device_name="Hall", sound="scream"):
+async def _alert(session, member, *, device_name="Hall", sound="scream", room_id=None):
     device = Device(
         household_id=member.household_id,
         name=device_name,
         kind="pi",
         key_hash=f"h{member.id}{device_name}",
+        room_id=room_id,
     )
     session.add(device)
     await session.flush()
@@ -158,7 +160,7 @@ async def test_delivers_to_all_enabled_channels(signed_up, session, factory, red
     assert member_id == member.id
     assert msg == {
         "kind": "alert", "alert_id": alert.id, "event_id": alert.event_id,
-        "sound_key": "scream", "label": "Scream", "device_name": "Hall",
+        "sound_key": "scream", "label": "Scream", "device_name": "Hall", "room_name": None,
         "at": "2026-11-07T14:05:30+00:00", "popup": True, "alarm": True, "has_snapshot": False,
     }  # fmt: skip
 
@@ -628,3 +630,76 @@ async def test_test_alert_ntfy_is_high_priority_bell(signed_up, session, factory
     await _run(alert, factory, redis)
     h = nt.calls[0].request.headers
     assert (h["Priority"], h["Tags"]) == ("high", "bell")
+
+
+async def _room(session, member, name="Living room"):
+    room = Room(household_id=member.household_id, name=name, kind="common")
+    session.add(room)
+    await session.flush()
+    return room
+
+
+@respx.mock
+async def test_room_name_in_live_alert_and_texts(signed_up, session, factory, redis, published):
+    import json
+
+    member, _ = await signed_up()
+    await _prefs(session, member, telegram=True, telegram_chat_id="42", ntfy_topic="t")
+    room = await _room(session, member)
+    alert = await _alert(session, member, device_name="Living room mic", room_id=room.id)
+    tg = respx.post(TG_URL).mock(return_value=httpx.Response(200, json={"ok": True}))
+    nt = respx.post("https://ntfy.test/t").mock(return_value=httpx.Response(200))
+    await _run(alert, factory, redis)
+    expected = "⚠️ Scream detected by Living room mic in Living room at 14:05 UTC — Home Awareness"
+    assert json.loads(tg.calls[0].request.content)["text"] == expected
+    assert nt.calls[0].request.content.decode() == expected
+    assert published[0][1]["room_name"] == "Living room"
+
+
+@respx.mock
+async def test_no_room_keeps_text_and_room_name_none(signed_up, session, factory, redis, published):
+    member, _ = await signed_up()
+    await _prefs(session, member, ntfy_topic="t")
+    alert = await _alert(session, member)
+    nt = respx.post("https://ntfy.test/t").mock(return_value=httpx.Response(200))
+    await _run(alert, factory, redis)
+    assert nt.calls[0].request.content.decode() == (
+        "⚠️ Scream detected by Hall at 14:05 UTC — Home Awareness"
+    )
+    assert published[0][1]["room_name"] is None
+
+
+@respx.mock
+async def test_room_deleted_after_event_gives_none(signed_up, session, factory, redis, published):
+    member, _ = await signed_up()
+    room = await _room(session, member)
+    alert = await _alert(session, member, room_id=room.id)
+    dev = await session.scalar(select(Device).where(Device.room_id == room.id))
+    await session.delete(room)
+    await session.flush()
+    await session.refresh(dev)  # FK is ON DELETE SET NULL
+    await _run(alert, factory, redis)
+    assert published[0][1]["room_name"] is None
+
+
+@respx.mock
+async def test_other_household_room_never_leaks(
+    signed_up, session, factory, redis, published, client
+):
+    a, h_a = await signed_up(email="a@example.com", household_name="A")
+    b, _ = await signed_up(email="b@example.com", household_name="B")
+    secret = await _room(session, b, "B secret room")
+    alert = await _alert(session, a, room_id=secret.id)  # corrupt link across households
+    await _run(alert, factory, redis)
+    assert published[0][1]["room_name"] is None
+    rows = (await client.get("/alerts", headers=h_a)).json()
+    assert rows[0]["room_name"] is None
+    assert "B secret room" not in (await client.get("/events", headers=h_a)).text
+
+
+async def test_alerts_list_has_room_name(client, signed_up, session):
+    member, h = await signed_up()
+    room = await _room(session, member)
+    await _alert(session, member, room_id=room.id)
+    body = (await client.get("/alerts", headers=h)).json()
+    assert body[0]["room_name"] == "Living room" and body[0]["device_name"] == "Hall"

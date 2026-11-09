@@ -24,6 +24,7 @@ from app.events.models import Event
 from app.live.hub import publish_to_household
 from app.ratelimit import by_member, rate_limit
 from app.redis import get_redis
+from app.rooms.models import Room
 from app.rules.models import AlertPreference
 from app.security import hash_token, new_token
 from app.tenancy import Tenant, get_agent_tenant, get_tenant
@@ -44,6 +45,7 @@ class AlertOut(BaseModel):
     sound_key: str
     label: str
     device_name: str | None
+    room_name: str | None
     created_at: datetime
     status: str
     acknowledged_by: int | None  # the member who said "I'm on it" (for its whole event)
@@ -68,17 +70,21 @@ async def list_alerts(
         await session.execute(
             tenant.select(Alert)
             .where(Alert.member_id == tenant.member.id)
-            .add_columns(Device.name)
+            .add_columns(Device.name, Room.name)
             .outerjoin(Event, Event.id == Alert.event_id)
             .outerjoin(
                 Device,
                 (Device.id == Event.device_id) & (Device.household_id == Alert.household_id),
             )
+            .outerjoin(
+                Room,
+                (Room.id == Device.room_id) & (Room.household_id == Alert.household_id),
+            )
             .order_by(Alert.created_at.desc(), Alert.id.desc())
             .limit(limit)
         )
     ).all()
-    by_alert: dict[int, list[Delivery]] = {a.id: [] for a, _ in rows}
+    by_alert: dict[int, list[Delivery]] = {a.id: [] for a, *_ in rows}
     if by_alert:  # deliveries have no household_id: reach them only via the scoped alerts above
         for d in await session.scalars(
             select(Delivery).where(Delivery.alert_id.in_(by_alert)).order_by(Delivery.id)
@@ -91,12 +97,13 @@ async def list_alerts(
             sound_key=a.sound_key,
             label=SOUNDS[a.sound_key].label if a.sound_key in SOUNDS else "Test alert",
             device_name=name,
+            room_name=room_name,
             created_at=a.created_at,
             status=a.status,
             acknowledged_by=a.acknowledged_by,
             deliveries=[DeliveryOut(**_d(d)) for d in by_alert[a.id]],
         )
-        for a, name in rows
+        for a, name, room_name in rows
     ]
 
 

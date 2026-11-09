@@ -25,6 +25,7 @@ from app.live.hub import publish_to_household
 from app.metrics import ALERTS_CREATED, EVENTS_MERGED, EVENTS_RECEIVED
 from app.ratelimit import by_device_key, enforce, rate_limit
 from app.redis import get_redis
+from app.rooms.models import Room
 from app.rules.engine import RuleOutcome, process_event
 from app.rules.incidents import FIRED, NEW_FILES, NX_KEYS, check_incidents
 from app.snapshots import store
@@ -177,6 +178,12 @@ async def post_event(
         ALERTS_CREATED.labels(event.sound_key).inc(len(outcome.alert_ids))
     for alert_id in outcome.alert_ids:  # after commit: workers must see the rows
         await enqueue_or_fallback(jobs, alert_id)
+    room = (
+        await session.scalar(tenant.select(Room).where(Room.id == device.room_id))
+        if device.room_id is not None
+        else None
+    )
+    room_name = room.name if room else None
     await publish_to_household(
         redis,
         tenant.household_id,
@@ -187,6 +194,7 @@ async def post_event(
             "label": get_sound(event.sound_key).label,
             "device_id": device.id,
             "device_name": device.name,
+            "room_name": room_name,
             "confidence": event.confidence,
             "received_at": now.isoformat(),
             "merged": event.merged,
@@ -258,11 +266,13 @@ async def list_events(
         tenant.select(Event)
         .add_columns(
             Device.name,
+            Room.name,
             exists().where(Snapshot.event_id == Event.id).label("has_snapshot"),
         )
         .outerjoin(
             Device, (Device.id == Event.device_id) & (Device.household_id == Event.household_id)
         )
+        .outerjoin(Room, (Room.id == Device.room_id) & (Room.household_id == Event.household_id))
         .order_by(Event.received_at.desc(), Event.id.desc())
         .limit(limit)
     )
@@ -274,10 +284,11 @@ async def list_events(
             sound_key=e.sound_key,
             label=get_sound(e.sound_key).label,
             device_name=name,
+            room_name=room_name,
             confidence=e.confidence,
             received_at=e.received_at,
             merged=e.merged,
             has_snapshot=has_snapshot,
         )
-        for e, name, has_snapshot in (await session.execute(query)).all()
+        for e, name, room_name, has_snapshot in (await session.execute(query)).all()
     ]

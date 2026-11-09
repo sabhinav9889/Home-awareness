@@ -97,6 +97,23 @@ async def test_glass_then_person_away_raises_break_in_with_camera_snapshot(
     assert r.status_code == 200
 
 
+async def test_incident_alert_carries_camera_room(client, session, redis, signed_up):
+    member, h = await signed_up()
+    room = await _room(client, h, "Hall")
+    mic, _ = await _device(client, h, "Mic", room_id=room)
+    cam, _ = await _device(client, h, "Cam", room_id=room, camera=True)
+    await _feed(session, redis, member.household_id, mic, "glass_breaking", 0)
+    _, ids = await _feed(session, redis, member.household_id, cam, "person_away", 3)
+    alert = await session.get(Alert, ids[0])
+    # the alert's event is the incident event on the camera: its device (and so its room) is
+    # what delivery and GET /alerts resolve
+    rows = (await client.get("/alerts", headers=h)).json()
+    assert [r["id"] for r in rows] == [alert.id]
+    assert rows[0]["device_name"] == "Cam" and rows[0]["room_name"] == "Hall"
+    events = {e["sound_key"]: e for e in (await client.get("/events", headers=h)).json()}
+    assert events["incident_break_in"]["room_name"] == "Hall"
+
+
 async def test_reversed_order_also_works(client, session, redis, signed_up):
     member, h = await signed_up()
     room = await _room(client, h, "Hall")
