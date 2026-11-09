@@ -1,3 +1,5 @@
+Step-by-step guide for a first deployment: [docs/deploy-oracle.md](../docs/deploy-oracle.md).
+
 # Deployment
 
 ## Backups

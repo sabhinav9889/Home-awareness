@@ -128,6 +128,7 @@ Reliability labels are estimates, not measured. An early task must measure each 
 - **Portability requirements (my calls), so the fallback is real and not theoretical:** all config through environment variables; one Docker image for both hosts; alert delivery behind a job-runner interface with two implementations, a Celery worker on Oracle and an in-process async runner on Render; Redis used for cooldowns, merge windows, and rate limits only, not on every heartbeat, so the Upstash budget holds; a documented, tested restore from the nightly backup into Neon.
 - **HTTPS:** a free DuckDNS subdomain and Caddy with automatic Let's Encrypt certificates. This also gives the phone sensor page the HTTPS it needs for microphone access.
 - **Backups:** a nightly `pg_dump` kept on the VM plus a copy off it (builder picks where, at $0).
+- **Status, 2026-11-09:** the deployment tooling exists (production compose overlay, Caddy, DuckDNS updater, nightly backups with a tested restore, VM bootstrap, deploy script with rollback, auto-deploy workflow) and is described in [docs/deploy-oracle.md](deploy-oracle.md). It was verified locally only; Arm image builds, Oracle's firewall, real certificate issuance, DuckDNS, a real SSH deploy, real email and UptimeRobot stay unverified until a real VM deploy (see [section 14 of the guide](deploy-oracle.md#14-what-was-verified-and-what-was-not)). The Render, Neon and Upstash fallback has not been deployed or tested.
 
 ## 11. Constraints
 

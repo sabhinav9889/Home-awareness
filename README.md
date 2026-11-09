@@ -21,6 +21,10 @@ Generate a secret with `python -c "import secrets;print(secrets.token_urlsafe(48
 
 Configuration is environment variables only (see `.env.example` and `app/config.py`). `JOB_RUNNER=celery` (default, used by Compose) sends alert delivery to the worker; `inprocess` runs it inside the API process, for hosts without a worker.
 
+## Deploy it
+
+To run the whole system on a free Oracle Cloud VM (HTTPS, nightly backups, optional auto-deploy), follow the step-by-step guide [docs/deploy-oracle.md](docs/deploy-oracle.md). Reference for the scripts: [deploy/README.md](deploy/README.md).
+
 ## Upgrading to 1b
 
 If you ran an earlier version:
