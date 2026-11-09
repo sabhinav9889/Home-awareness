@@ -215,7 +215,8 @@ class _Agent:
         label = msg.get("label") or "Sound"
         device = msg.get("device_name") or "a sensor"
         log.info("alert %s: %s on %s", msg.get("alert_id"), label, device)
-        title = f"{label} — {device}"
+        room = msg.get("room_name")
+        title = f"{label} — {device} in {room}" if room else f"{label} — {device}"
         if msg.get("sound_key") == TEST_SOUND_KEY:  # no sensor involved
             title = "Test alert — your alerts work"
         key = self._key(msg)

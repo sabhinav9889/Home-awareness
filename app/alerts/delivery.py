@@ -139,6 +139,14 @@ async def _abort(session: Any, alert_id: int) -> None:
         log.error("could not mark alert %s failed", alert_id, exc_info=True)
 
 
+def _plain(name: str) -> str:
+    """A name for the one-line alert text: control characters dropped, whitespace collapsed
+    (a line break in a room or sensor name must never reach a push header)."""
+    return " ".join(
+        "".join(" " if c.isspace() else c for c in name if c.isprintable() or c.isspace()).split()
+    )
+
+
 async def _deliver_claimed(
     session: Any,
     alert_id: int,
@@ -188,7 +196,8 @@ async def _deliver_claimed(
         sound = get_sound(alert.sound_key)
         label, urgent = sound.label, sound.severity == "urgent"
         hhmm, tz = tz_label(at, household_tz)
-        where = f"{device_name} in {room_name}" if room_name else device_name
+        shown_room = _plain(room_name) if room_name else ""
+        where = f"{_plain(device_name)} in {shown_room}" if shown_room else _plain(device_name)
         text = f"⚠️ {label} detected by {where} at {hhmm} {tz} — Home Awareness"
 
     Send = Callable[[], Awaitable[object]]

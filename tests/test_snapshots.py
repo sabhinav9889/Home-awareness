@@ -645,3 +645,51 @@ async def test_telegram_5xx_ok_false_on_photo_retries_without_text_fallback(
     msg = respx.post(TG_URL).mock(return_value=httpx.Response(200, json={"ok": True}))
     await _run(alert, factory, redis, sleeps)
     assert photo.call_count == 3 and not msg.called
+
+
+@respx.mock
+async def test_newline_in_room_and_device_names_does_not_lose_the_ntfy_upload(
+    signed_up, session, factory, redis, published
+):
+    from email.header import decode_header
+
+    member, _ = await signed_up()
+    await _prefs(session, member, ntfy_topic="my-topic")
+    room = td.Room(household_id=member.household_id, name="Kitchen\nX\r\nY", kind="common")
+    session.add(room)
+    await session.flush()
+    alert = await _with_snapshot(session, member, device_name="Mic\x07\tone", room_id=room.id)
+    put = respx.put("https://ntfy.test/my-topic").mock(return_value=httpx.Response(200))
+    plain = respx.post("https://ntfy.test/my-topic").mock(return_value=httpx.Response(200))
+    await _run(alert, factory, redis)
+    assert put.call_count == 1 and not plain.called
+    raw, enc = decode_header(put.calls[0].request.headers["Message"])[0]
+    assert (raw.decode(enc) if enc else raw) == (
+        "⚠️ Scream detected by Mic one in Kitchen X Y at 14:05 UTC — Home Awareness"
+    )
+
+
+@respx.mock
+async def test_telegram_text_with_markup_characters_is_sent_as_is(
+    signed_up, session, factory, redis, published
+):
+    member, _ = await signed_up()
+    await _prefs(session, member, telegram=True, telegram_chat_id="42")
+    room = td.Room(household_id=member.household_id, name="A_b *c* <d> & e", kind="common")
+    session.add(room)
+    await session.flush()
+    alert = await _alert(session, member, room_id=room.id)
+    tg = respx.post(TG_URL).mock(return_value=httpx.Response(200, json={"ok": True}))
+    await _run(alert, factory, redis)
+    sent = json.loads(tg.calls[0].request.content)
+    assert sent["text"] == (
+        "⚠️ Scream detected by Hall in A_b *c* <d> & e at 14:05 UTC — Home Awareness"
+    )
+    assert "parse_mode" not in sent
+
+
+def test_ntfy_header_collapses_line_breaks():
+    from app.alerts.ntfy import _header
+
+    assert "\n" not in _header("a\nb\r\nc") and "\r" not in _header("a\nb\r\nc")
+    assert _header("plain text") == "plain text"

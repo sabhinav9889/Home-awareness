@@ -363,8 +363,7 @@ function render() {
     returnFocus = document.activeElement;
     screen = el("div", {
       class: "alert-screen", role: "alertdialog", "aria-modal": "true",
-      "aria-live": "assertive", "aria-labelledby": "alert-title",
-      "aria-describedby": "alert-where alert-desc", tabindex: "-1",
+      "aria-live": "assertive", "aria-labelledby": "alert-title", tabindex: "-1",
     });
     document.body.append(screen);
     setInert(true);
@@ -380,6 +379,9 @@ function render() {
   const active = document.activeElement;
   const focused = active !== screen && screen.contains(active) ? active.dataset.action : null;
   screen.replaceChildren(content(item, queue.length - 1));
+  // Only ids that exist: a test alert has no "where" line.
+  screen.setAttribute("aria-describedby",
+    ["alert-where", "alert-desc"].filter((id) => screen.querySelector(`#${id}`)).join(" "));
   if (changed) {
     screen.focus(); // never a button: a stray Enter or Space must not act
     return;

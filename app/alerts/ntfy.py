@@ -8,6 +8,7 @@ from app.alerts.errors import DeliveryError
 
 def _header(value: str) -> str:
     """Headers are ASCII: anything else goes as an RFC 2047 encoded word (ntfy decodes it)."""
+    value = " ".join(value.split())  # a CR or LF would make the request invalid
     if value.isascii():
         return value
     return f"=?UTF-8?B?{base64.b64encode(value.encode()).decode()}?="

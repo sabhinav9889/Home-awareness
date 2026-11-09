@@ -792,3 +792,23 @@ async def test_errors_never_log_the_agent_token(caplog):
     stop.set()
     await task
     assert "ha_agent_xyz" not in "\n".join(r.getMessage() for r in caplog.records)
+
+
+async def test_popup_title_names_the_room_when_there_is_one():
+    server = FakeServer(([dict(ALERT, room_name="Living room")], HANG))
+    notifier, alarm = FakeNotifier(), FakeAlarm()
+    stop, task = _start(server, notifier, alarm)
+    await _until(lambda: notifier.popups)
+    assert notifier.popups[0][0] == "Scream — Kitchen laptop in Living room"
+    stop.set()
+    assert await task == 0
+
+
+async def test_popup_title_without_room_is_unchanged():
+    server = FakeServer(([dict(ALERT, room_name=None)], HANG))
+    notifier, alarm = FakeNotifier(), FakeAlarm()
+    stop, task = _start(server, notifier, alarm)
+    await _until(lambda: notifier.popups)
+    assert notifier.popups[0][0] == TITLE
+    stop.set()
+    assert await task == 0

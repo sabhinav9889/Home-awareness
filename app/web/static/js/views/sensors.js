@@ -164,24 +164,24 @@ export async function sensorsView() {
         show(listMsg, err.detail || err.message, "error");
       }
     });
+    const badge = capabilityBadge(d);
     const picker = roomSelect(d, rooms, {
       onSaved: () => { show(listMsg, ""); refresh(); },
       onError: (m) => show(listMsg, m, "error"),
     });
     let hint = null;
     if (d.room_id == null) {
-      hint = el("div", { class: "room-hint" }, el("a", { href: "#/sensors" },
-        "No room — assign one so it can join incidents"));
-      hint.firstChild.addEventListener("click", (ev) => {
-        ev.preventDefault(); // not a route change: just move to the room select below
-        picker.focus();
-      });
+      const link = el("button", { type: "button", class: "link-btn link room-hint-link" },
+        "No room — assign one so it can join incidents");
+      link.addEventListener("click", () => picker.focus()); // the room select just below
+      hint = el("div", { class: "room-hint" }, link);
     }
     return el("article", { class: `device-row sensor-${d.status}` },
       el("span", { class: "dot", "aria-hidden": "true" }),
       el("div", { class: "device-main" },
         el("div", { class: "sensor-name" }, d.name),
-        el("div", { class: "sensor-badges" }, capabilityBadge(d)),
+        badge.textContent !== kind // "Camera" next to "Camera": say it once
+          ? el("div", { class: "sensor-badges" }, badge) : null,
         el("div", { class: "sensor-sub" },
           [kind, el("span", { class: "device-state" }, state), when].filter(Boolean)
             .flatMap((x, i) => (i ? [" · ", x] : [x]))),
@@ -270,6 +270,7 @@ export async function sensorsView() {
       showCode(result, out, value);
       input.value = "";
       suggestMic.reset();
+      suggestMic.update(); // the room is still selected: offer the next name
     } catch (err) {
       show(formMsg, err.detail || err.message, "error");
     } finally {
@@ -306,6 +307,9 @@ export async function sensorsView() {
     fillPick(roomPick, rooms.length ? "Choose a room" : "No rooms yet");
     fillPick(pairRoom, rooms.length ? "No room" : "No rooms yet");
     pairRoomNote.hidden = rooms.length > 0;
+    // A selected room that vanished leaves a stale "<Room> mic" behind: clear it.
+    if (pairRoom.value === "") suggestMic.update();
+    if (roomPick.value === "") suggestCamera.update();
     pairRoomNote.replaceChildren("No rooms yet. Create one in ",
       el("a", { href: "#/rooms" }, "Rooms"), " so alerts can say where they come from.");
     showRoomNotice();
@@ -373,6 +377,7 @@ export async function sensorsView() {
       showCode(camResult, out, value);
       input.value = "";
       suggestCamera.reset();
+      suggestCamera.update();
       consent.checked = false;
     } catch (err) {
       show(camMsg, err.detail || err.message, "error");

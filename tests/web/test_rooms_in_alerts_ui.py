@@ -66,6 +66,7 @@ def test_popup_without_a_room_shows_only_the_sensor(new_page, live):
     _deliver(live, *alert_ids)
     expect(_screen(page).locator(".alert-device")).to_have_text("Hall mic")
     expect(_screen(page).locator(".alert-room")).to_have_count(0)
+    expect(_screen(page)).to_have_attribute("aria-describedby", "alert-where alert-desc")
 
 
 def test_catch_up_alert_shows_the_room(new_page, live):
@@ -87,6 +88,8 @@ def test_test_alert_has_no_room_line(new_page, live):
     _test_alert(live, m)
     expect(_screen(page)).to_be_visible()
     expect(_screen(page).locator(".alert-device")).to_have_count(0)
+    # no dangling id for the "where" line a test alert doesn't have
+    expect(_screen(page)).to_have_attribute("aria-describedby", "alert-desc")
 
 
 def test_popup_room_is_text_not_html_and_fits_a_phone(new_page, live):
@@ -154,6 +157,21 @@ def test_add_a_sensor_with_a_room_sends_room_id_and_suggests_a_name(page, live):
     assert body["room_id"] == kitchen["id"] and body["name"] == "Kitchen mic"
 
 
+def test_name_is_re_suggested_after_a_submit_and_a_vanished_room_clears_it(page, live):
+    m = _member(live)
+    kitchen = _room(live, m, "Kitchen")
+    _open(page, m, "#/sensors")
+    name = page.get_by_label("Sensor name")
+    page.get_by_label("Room (optional)").select_option(label="Kitchen")
+    expect(name).to_have_value("Kitchen mic")
+    page.get_by_role("button", name="Create pairing code").click()
+    expect(page.locator(".pair-result .pair-code")).to_be_visible()
+    expect(name).to_have_value("Kitchen mic")  # room still selected: the next name is offered
+    httpx.delete(f"{live.base_url}/rooms/{kitchen['id']}", headers=m.headers)
+    expect(page.get_by_label("Room (optional)")).to_have_value("", timeout=15000)
+    expect(name).to_have_value("")  # the stale suggestion went with the room
+
+
 def test_a_typed_name_is_never_overwritten(page, live):
     m = _member(live)
     _room(live, m, "Kitchen")
@@ -212,7 +230,8 @@ def test_capability_badges(page, live):
         return page.locator(".device-row").filter(has_text=name).locator(".cap-badge")
 
     expect(badge("Alpha")).to_have_text("Microphone")
-    expect(badge("Bravo")).to_have_text("Camera")
+    expect(badge("Bravo")).to_have_count(0)  # kind label already says "Camera"
+    expect(page.locator(".device-row").filter(has_text="Bravo")).to_contain_text("Camera")
     expect(badge("Charlie")).to_have_text("Microphone + Camera")
 
 
@@ -224,7 +243,7 @@ def test_no_room_hint_goes_away_after_assignment(page, live):
     row = page.locator(".device-row").filter(has_text="Loose mic")
     hint = row.locator(".room-hint")
     expect(hint).to_have_text("No room — assign one so it can join incidents")
-    hint.get_by_role("link").click()  # moves to the card's own room select
+    hint.get_by_role("button").click()  # moves to the card's own room select
     expect(row.get_by_label("Room for Loose mic")).to_be_focused()
     with page.expect_response(lambda r: r.request.method == "PATCH"):
         row.get_by_label("Room for Loose mic").select_option(label="Kitchen")
