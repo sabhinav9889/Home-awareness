@@ -16,6 +16,13 @@ x-prod-env: &prod-env
   <<: *db-url
   PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN:?set DOMAIN in deploy/.env.prod}}
   SNAPSHOT_KEY: ${SNAPSHOT_KEY:?set SNAPSHOT_KEY in deploy/.env.prod}
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in deploy/.env.prod}
+  # SMTP: the port must stay numeric (an empty string fails validation), the rest may be empty.
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_FROM: ${SMTP_FROM:-}
 
 services:
   caddy:
@@ -28,6 +35,7 @@ services:
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env.prod}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in deploy/.env.prod}
+      ACME_CA: ${ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

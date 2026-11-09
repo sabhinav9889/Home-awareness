@@ -7,4 +7,7 @@ __pycache__/
 .superpowers/
 .fake_sensor_key
 .fake_camera_key
-deploy/.env.prod
+deploy/.env.prod*
+!deploy/.env.prod.example
+deploy/.last_good
+deploy/.deploy.lock

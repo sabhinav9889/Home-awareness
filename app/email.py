@@ -45,8 +45,8 @@ class SmtpEmailSender:
             msg,
             hostname=self.host,
             port=self.port,
-            username=self.user,
-            password=self.password,
+            username=self.user or None,
+            password=self.password or None,
             start_tls=True if self.user else None,
         )
 

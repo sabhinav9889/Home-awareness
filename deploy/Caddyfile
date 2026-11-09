@@ -1,5 +1,16 @@
 {
 	email {$ACME_EMAIL}
+	# Let's Encrypt production by default; set ACME_CA to the staging directory for first tries.
+	# Note: an explicit acme_ca drops Caddy's default ZeroSSL fallback issuer.
+	acme_ca {$ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
+
+	# Never log secrets that travel in URLs: WebSocket ?token=... and the Telegram webhook path.
+	log default {
+		format filter {
+			wrap json
+			request>uri regexp "(token=)[^&]*|(/telegram/webhook/)[^/?]*" "${1}${2}REDACTED"
+		}
+	}
 }
 
 {$DOMAIN} {
@@ -12,7 +23,7 @@
 
 	header {
 		Strict-Transport-Security "max-age=31536000"
-		X-Content-Type-Options "nosniff"
+		?X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
 	}
 
