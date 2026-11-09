@@ -80,6 +80,7 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     entrypoint: ["bash", "/deploy/backup.sh", "--daemon"]
+    init: true # reaps children and forwards `docker stop` so a running backup ends cleanly
     environment:
       PGHOST: db
       PGUSER: home
@@ -92,6 +93,21 @@ services:
       - ./deploy/restore.sh:/deploy/restore.sh:ro
     depends_on:
       db: {condition: service_healthy}
+    logging: *logging
+
+  # Optional dynamic DNS for a free DuckDNS name. Off by default; enable with
+  # `--profile duckdns` or COMPOSE_PROFILES=duckdns (see deploy/README.md). Multi-arch image.
+  duckdns:
+    image: curlimages/curl:8.11.1
+    profiles: ["duckdns"]
+    restart: unless-stopped
+    entrypoint: ["sh", "/deploy/duckdns.sh"]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env.prod}
+      DUCKDNS_SUBDOMAIN: ${DUCKDNS_SUBDOMAIN:-}
+      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN:-}
+    volumes:
+      - ./deploy/duckdns.sh:/deploy/duckdns.sh:ro
     logging: *logging
 
 volumes:

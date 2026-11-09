@@ -20,6 +20,15 @@ scheduled backups. A failed run is retried after an hour.
   `SNAPSHOT_KEY` only matters for snapshots that exist right now; losing it makes the stored
   snapshots unreadable. Keep `deploy/.env.prod` (or at least `SNAPSHOT_KEY`, `JWT_SECRET` and
   `POSTGRES_PASSWORD`) in a password manager; the database backup does not contain them.
+- Backup files are owner-only (mode 0600 in a 0700 directory). `pg_dump` is cut off after
+  30 minutes (`DUMP_TIMEOUT_S`), and `docker stop` ends a running backup within a second or two
+  and removes the partial file.
+- Check `docker compose ... logs --since 48h backup` once a week: a failing backup only logs.
+- After a deploy that changes `deploy/backup.sh` or `deploy/restore.sh`, run
+  `docker compose ... up -d --force-recreate backup`: the scripts are single-file bind mounts,
+  which keep pointing at the old file when git replaces it.
+- Keep the backup image's Postgres major version in sync with the `db` image (both 16); a dump
+  from a newer `pg_dump` than the server is refused, and an older client may not read a newer one.
 
 Run one by hand and list the results:
 
@@ -32,11 +41,23 @@ Run one by hand and list the results:
     docker compose ... exec -T backup bash /deploy/restore.sh /backups/home-20261109-033000.sql.gz
 
 This creates `home_restore`, loads the file, and prints the table count and a few row counts.
-It refuses a target that already has tables unless `--yes-overwrite`, and refuses the live `home`
-database unless you pass both `--into home --yes-overwrite` (stop `api`, `worker` and `beat`
-first; a restore over `home` replaces everything in it). To copy a backup off the VM:
-`docker compose ... cp backup:/backups/FILE .`. To load it into another Postgres (for example
-Neon): `gunzip -c FILE | psql "$NEON_DATABASE_URL"`.
+The file is checked first (`gzip -t`, contains `CREATE TABLE`, and ends with pg_dump's
+`-- PostgreSQL database dump complete` line); a truncated file is refused before anything changes.
+A target that already has tables (in any non-system schema) is refused unless `--yes-overwrite`,
+and the live `home` database is refused unless you pass both `--into home --yes-overwrite` (stop
+`api`, `worker` and `beat` first; a restore over `home` replaces everything in it). The old
+tables are dropped and the dump is loaded in ONE transaction, so a dump that fails halfway rolls
+back and the database keeps its previous contents. `postgres`, `template0` and `template1` are
+never accepted as targets. To copy a backup off the VM: `docker compose ... cp backup:/backups/FILE .`.
+
+To load it into another Postgres (for example the Neon fallback):
+
+    gzip -dc FILE | psql -v ON_ERROR_STOP=1 -1 "$NEON_DATABASE_URL"
+
+Use Neon's direct (non-pooled) connection string and an EMPTY target database. The dump only
+needs the extensions Neon supports (this schema uses none beyond the defaults; check
+`CREATE EXTENSION` lines in the file if you add some). Without `ON_ERROR_STOP` a partial restore
+prints errors but still looks like success; with `-1` it is all or nothing.
 
 ### Optional off-box copy (Oracle Object Storage, S3 compatible, Always Free)
 
@@ -96,3 +117,55 @@ never contains secret values) and is also printed in the Actions log.
 
 **DEPLOY_PATH.** Use an absolute path (for example `/home/ubuntu/home-awareness`). A leading `~/` is
 expanded on the VM, but an absolute path is the safe choice.
+
+## VM bootstrap
+
+`deploy/bootstrap-vm.sh` prepares a fresh Ubuntu 22.04/24.04 VM once (written for Oracle Cloud Always
+Free Ampere A1, aarch64; the 1 GB x86 micro shapes are too small for this stack). Run it as the
+normal user (`ubuntu`), never as root; it calls `sudo` per step and refuses to run as root.
+
+```
+deploy/bootstrap-vm.sh --dry-run   # prints every step as "would: ...", changes nothing
+deploy/bootstrap-vm.sh
+```
+
+It installs Docker Engine and the compose plugin from Docker's apt repository (the signing key's
+fingerprint is checked against the published one), adds you to the `docker` group, opens 80/tcp,
+443/tcp and 443/udp in the host firewall, enables `unattended-upgrades` and creates a 2 GB swap file
+if there is no swap. A second run changes nothing and says so.
+
+**Oracle firewall.** Oracle's Ubuntu images load iptables rules that accept SSH and then REJECT
+everything else. The script inserts its rules before that REJECT rule (never touching the SSH rule)
+and writes them into `/etc/iptables/rules.v4` so they survive a reboot (a backup is kept as
+`rules.v4.ha-bak`). It does not install or enable ufw. The cloud firewall is separate: also add
+ingress rules for TCP 80, TCP 443 and UDP 443 to the VCN security list or network security group.
+
+After it finishes it prints the remaining manual steps: log out and in (docker group), clone the
+repository, `python3 scripts/gen_secrets.py`, edit `deploy/.env.prod`, run `deploy/deploy.sh`.
+
+## DuckDNS (optional)
+
+For a free `yourname.duckdns.org` address whose IP may change, the optional `duckdns` service calls
+DuckDNS every 5 minutes. It is off unless its compose profile is enabled, so users with their own
+domain or a reserved IP do not run it.
+
+1. Create the subdomain and copy your token from duckdns.org; set `DOMAIN=yourname.duckdns.org` and
+   `DUCKDNS_TOKEN=...` in `deploy/.env.prod`. (`DUCKDNS_SUBDOMAIN` overrides the name derived from
+   `DOMAIN`; without it, a `DOMAIN` that does not end in `.duckdns.org` makes the service exit with a
+   clear message.)
+2. Enable the profile by adding the line `COMPOSE_PROFILES=duckdns` to `deploy/.env.prod`.
+   `deploy/deploy.sh` passes that file with `--env-file`, and compose reads `COMPOSE_PROFILES` from
+   it, so every deploy (including the GitHub Actions one, whose SSH session has no such variable)
+   starts and updates the service. By hand you can use `--profile duckdns` instead.
+
+The token is handed to curl on stdin only, so it is not in the process list, and neither the URL
+nor the response is logged. The log has one line per state change (`OK`, then `KO` or `OK again`),
+not one per check. Look at it with `docker compose ... logs duckdns`.
+
+## Monitoring
+
+`GET /health` needs no authentication and returns only `{"status":"ok","db":"ok","redis":"ok"}`
+(HTTP 200 when the database and Redis answer, an error status otherwise). To monitor it for free,
+create an UptimeRobot account, add an HTTP(s) monitor for `https://DOMAIN/health` with a 5 minute
+interval and alert contacts of your choice. Pair it with the Oracle rule of signing in at least
+every 60 days so the always-free account stays active.

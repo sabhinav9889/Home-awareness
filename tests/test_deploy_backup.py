@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import time
 from datetime import datetime, timedelta
@@ -25,10 +26,12 @@ needs_docker = pytest.mark.skipif(not HAVE_DOCKER, reason="docker not available"
 
 PG_DUMP_STUB = r"""#!/usr/bin/env bash
 echo "pg_dump $*" >> "$STUB_DIR/calls.log"
+if [ -f "$STUB_DIR/dump_sleep" ]; then exec sleep 30; fi
 if [ -f "$STUB_DIR/dump_nothing" ]; then echo "-- empty"; exit 0; fi
 echo "-- dump"
 echo "CREATE TABLE public.a (id int);"
 echo "CREATE TABLE public.b (id int);"
+if [ ! -f "$STUB_DIR/dump_notrailer" ]; then echo "-- PostgreSQL database dump complete"; fi
 if [ -f "$STUB_DIR/dump_fail" ]; then
   echo "pg_dump: error: connection to server failed" >&2
   exit 1
@@ -40,7 +43,9 @@ PSQL_STUB = r"""#!/usr/bin/env bash
 echo "psql $*" >> "$STUB_DIR/calls.log"
 args="$*"
 if [[ "$args" == *"-f -"* ]]; then
-  cat > "$STUB_DIR/loaded.sql"; touch "$STUB_DIR/loaded"; exit 0
+  cat >> "$STUB_DIR/loaded.sql"; touch "$STUB_DIR/loaded"
+  if [ -f "$STUB_DIR/psql_load_fail" ]; then echo "psql: ERROR: stub load failure" >&2; exit 1; fi
+  exit 0
 fi
 q="${args,,}"
 if [[ "$q" == *pg_database* ]]; then cat "$STUB_DIR/db_exists" 2>/dev/null; exit 0; fi
@@ -102,7 +107,7 @@ def _files(env) -> list[str]:
 def _make(env, stamp: str) -> str:
     name = f"home-{stamp}.sql.gz"
     with gzip.open(Path(env["BACKUP_DIR"]) / name, "wt") as f:
-        f.write("CREATE TABLE t (id int);\n")
+        f.write("CREATE TABLE t (id int);\n-- PostgreSQL database dump complete\n")
     return name
 
 
@@ -286,6 +291,7 @@ def test_restore_into_new_default_database(env):
     assert "home_restore" in _calls(env)
     assert "create database" in _calls(env).lower()
     assert _wrote(env)
+    assert "drop schema" not in (Path(env["STUB_DIR"]) / "loaded.sql").read_text().lower()
     assert "tables: 2" in r.stdout.lower()
     assert "a: 7" in r.stdout
 
@@ -297,6 +303,7 @@ def test_restore_refuses_live_database_without_flag(env):
     assert "--yes-overwrite" in r.stdout + r.stderr
     assert not _wrote(env)
     assert "drop schema" not in _calls(env).lower()
+    assert "psql" not in _calls(env)
 
 
 def test_restore_into_live_database_with_both_flags(env):
@@ -306,7 +313,18 @@ def test_restore_into_live_database_with_both_flags(env):
     r = _run(RESTORE_SH, env, f, "--into", "home", "--yes-overwrite")
     assert r.returncode == 0, r.stderr
     assert _wrote(env)
-    assert "drop schema" in _calls(env).lower()
+    # the clear and the load are ONE psql call in ONE transaction, so a bad dump rolls back
+    load = [c for c in _calls(env).splitlines() if c.endswith("-f -")]
+    assert len(load) == 1 and " -1 " in load[0] and "ON_ERROR_STOP=1" in load[0]
+    sql = (Path(env["STUB_DIR"]) / "loaded.sql").read_text()
+    assert sql.startswith("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    assert "CREATE TABLE" in sql
+    assert (
+        "drop schema"
+        not in "\n".join(
+            c for c in _calls(env).splitlines() if "-c" in c and "format(" not in c
+        ).lower()
+    )
 
 
 def test_restore_refuses_non_empty_target(env):
@@ -348,6 +366,134 @@ def test_restore_never_prints_credentials(env):
         r = _run(RESTORE_SH, env, *args)
         assert SECRET not in r.stdout + r.stderr
     assert SECRET not in _calls(env)
+
+
+def _stub(env, name):
+    return Path(env["STUB_DIR"]) / name
+
+
+def test_backup_files_and_directory_are_private(env):
+    d = Path(env["BACKUP_DIR"])
+    d.chmod(0o755)
+    assert _run(BACKUP_SH, env).returncode == 0
+    assert stat.S_IMODE(d.stat().st_mode) == 0o700
+    (name,) = _files(env)
+    assert stat.S_IMODE((d / name).stat().st_mode) == 0o600
+    fresh = d / "sub" / "dir"
+    r = _run(BACKUP_SH, env, extra={"BACKUP_DIR": str(fresh)})
+    assert r.returncode == 0, r.stderr
+    assert stat.S_IMODE(fresh.stat().st_mode) == 0o700
+
+
+def test_dump_without_completion_trailer_is_rejected(env):
+    old = _make(env, "20240101-033000")
+    _stub(env, "dump_notrailer").touch()
+    r = _run(BACKUP_SH, env)
+    assert r.returncode != 0
+    assert _files(env) == [old]
+
+
+def test_pg_dump_timeout_logs_clearly_and_cleans_up(env):
+    old = _make(env, "20240101-033000")
+    _stub(env, "dump_sleep").touch()
+    t0 = time.monotonic()
+    r = _run(BACKUP_SH, env, extra={"DUMP_TIMEOUT_S": "1"})
+    assert time.monotonic() - t0 < 15
+    assert r.returncode != 0
+    assert "pg_dump timed out" in r.stdout + r.stderr
+    assert _files(env) == [old]
+
+
+def test_sigterm_mid_backup_exits_promptly_without_part(env):
+    _stub(env, "dump_sleep").touch()
+    p = subprocess.Popen(
+        ["bash", str(BACKUP_SH)], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True,
+    )  # fmt: skip
+    time.sleep(1.5)
+    assert any(f.endswith(".part") for f in _files(env))  # really mid-backup
+    t0 = time.monotonic()
+    p.terminate()
+    p.communicate(timeout=10)
+    assert time.monotonic() - t0 < 2
+    assert p.returncode != 0
+    assert _files(env) == []
+
+
+def test_daemon_sigterm_mid_backup_exits_promptly_without_part(env):
+    _stub(env, "dump_sleep").touch()
+    p = subprocess.Popen(
+        ["bash", str(BACKUP_SH), "--daemon"],
+        env={**env, "POLL_SECONDS": "1", "BACKUP_AT": "0000"}, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True,
+    )  # fmt: skip
+    time.sleep(2.5)
+    assert any(f.endswith(".part") for f in _files(env))
+    t0 = time.monotonic()
+    p.terminate()
+    p.communicate(timeout=10)
+    assert time.monotonic() - t0 < 2.5
+    assert _files(env) == []
+
+
+def test_future_dated_files_do_not_take_a_daily_slot(env):
+    today = datetime.now().date()
+    future = _make(env, "20991231-033000")
+    names = [_make(env, f"{today - timedelta(days=n):%Y%m%d}-033000") for n in range(1, 16)]
+    assert _run(BACKUP_SH, env).returncode == 0
+    present = set(_files(env))
+    assert future in present  # neither counted nor deleted
+    assert set(names[:13]) <= present  # still 13 older days + today = 14
+    assert names[13] not in present  # day 14 back is outside the daily window
+
+
+def test_restore_refuses_truncated_dump_before_touching_anything(env):
+    bad = Path(env["BACKUP_DIR"]) / "home-20240101-033000.sql.gz"
+    with gzip.open(bad, "wt") as f:
+        f.write("CREATE TABLE t (id int);\nINSERT INTO t VALUES (1);\n")  # no trailer
+    (_stub(env, "db_exists")).write_text("1\n")
+    r = _run(RESTORE_SH, env, str(bad), "--yes-overwrite")
+    assert r.returncode != 0
+    assert "complete" in (r.stdout + r.stderr).lower()
+    assert "psql" not in _calls(env) and not _wrote(env)
+
+
+def test_restore_refuses_dump_without_tables(env):
+    bad = Path(env["BACKUP_DIR"]) / "home-20240101-033000.sql.gz"
+    with gzip.open(bad, "wt") as f:
+        f.write("-- PostgreSQL database dump complete\n")
+    assert _run(RESTORE_SH, env, str(bad)).returncode != 0
+    assert "psql" not in _calls(env)
+
+
+@pytest.mark.parametrize("name", ["postgres", "template0", "template1"])
+@pytest.mark.parametrize("extra", [(), ("--yes-overwrite",)])
+def test_restore_never_targets_system_databases(env, name, extra):
+    f = _backup_file(env)
+    r = _run(RESTORE_SH, env, f, "--into", name, *extra)
+    assert r.returncode != 0
+    assert "psql" not in _calls(env)
+
+
+@pytest.mark.parametrize("name", ["1abc", "_x", "Home", "a-b", "a" * 64, "", "a b"])
+def test_restore_rejects_malformed_database_names(env, name):
+    f = _backup_file(env)
+    assert _run(RESTORE_SH, env, f, "--into", name).returncode != 0
+    assert "psql" not in _calls(env)
+
+
+def test_restore_emptiness_check_covers_all_schemas(env):
+    f = _backup_file(env)
+    assert _run(RESTORE_SH, env, f).returncode == 0
+    assert "table_schema = 'public'" not in _calls(env)
+
+
+def test_restore_load_failure_is_reported(env):
+    f = _backup_file(env)
+    _stub(env, "psql_load_fail").touch()
+    r = _run(RESTORE_SH, env, f)
+    assert r.returncode != 0
+    assert "restored" not in r.stdout.lower().replace("not restored", "")
 
 
 # ------------------------------------------------------------ real drill
@@ -417,6 +563,25 @@ def test_real_postgres_backup_and_restore_drill():
         # a second restore into the now non-empty database is refused
         again = _dc(*run, "/deploy/restore.sh", match.group(0), check=False)
         assert again.returncode != 0
+        # an overwrite with a dump that is valid gzip but bad SQL must roll back completely
+        bad_cmd = (
+            "printf 'CREATE TABLE x (id int);\\nTHIS IS NOT SQL;\\n"
+            "-- PostgreSQL database dump complete\\n' | gzip > /backups/bad.sql.gz; "
+            "printf 'CREATE TABLE x (id int);\\n' | gzip > /backups/truncated.sql.gz"
+        )
+        _dc("run", "--rm", "--no-deps", "-T", "--entrypoint", "bash", "backup", "-c", bad_cmd)
+        bad = _dc(*run, "/deploy/restore.sh", "/backups/bad.sql.gz", "--yes-overwrite", check=False)
+        assert bad.returncode != 0
+        trunc = _dc(*run, "/deploy/restore.sh", "/backups/truncated.sql.gz", "--yes-overwrite",
+                    check=False)  # fmt: skip
+        assert trunc.returncode != 0
+        for table, expected in (("users", "5"), ("events", "40")):
+            assert count("home_restore", table) == expected
+        # a good dump over the existing database replaces it in one transaction
+        good = _dc(*run, "/deploy/restore.sh", match.group(0), "--yes-overwrite")
+        assert "tables: 2" in good.stdout.lower()
+        for table, expected in (("users", "5"), ("events", "40")):
+            assert count("home_restore", table) == expected
     finally:
         _dc("down", "-v", "--remove-orphans", check=False)
         left = subprocess.run(
@@ -458,6 +623,7 @@ def test_backup_service_shape():
     assert env["PGHOST"] == "db" and env["PGUSER"] == "home" and env["PGDATABASE"] == "home"
     assert env["PGPASSWORD"] == DRILL_ENV["POSTGRES_PASSWORD"]
     assert svc["entrypoint"][-1] == "--daemon"
+    assert svc["init"] is True
 
 
 @needs_docker
@@ -476,3 +642,5 @@ def test_readme_documents_backups():
     for word in ("restore.sh", "SNAPSHOT_KEY", "password manager", "03:30", "RCLONE_REMOTE"):
         assert word in text, word
     assert "not backed up" in text.lower()
+    for word in ("ON_ERROR_STOP", "force-recreate", "--since 48h", "non-pooled", "major version"):
+        assert word in text, word
