@@ -5,7 +5,7 @@ import { request } from "../api.js";
 import { subscribe } from "../live.js";
 import { confirmDialog, el, field, show } from "../ui.js";
 import { ago, KINDS, MIC_CLIPPING_NOTE } from "./overview.js";
-import { PRIVATE_KINDS, roomSelect } from "./rooms.js";
+import { capabilityBadge, PRIVATE_KINDS, roomSelect } from "./rooms.js";
 
 const CODE_TTL_MS = 10 * 60_000;
 const TICK_MS = 1000;
@@ -65,7 +65,7 @@ export async function sensorsView() {
       if (closed) return;
       devices = rows;
       rooms = roomRows;
-      if (!document.getElementById("cam-room")?.matches(":focus")) renderRoomPick();
+      if (!document.querySelector("#cam-room:focus, #pair-room:focus")) renderRoomPick();
       // Never rebuild the list under someone's focus (a select or switch in use): do it
       // when focus leaves instead.
       if (listBox.contains(document.activeElement)) listStale = true;
@@ -164,10 +164,24 @@ export async function sensorsView() {
         show(listMsg, err.detail || err.message, "error");
       }
     });
+    const picker = roomSelect(d, rooms, {
+      onSaved: () => { show(listMsg, ""); refresh(); },
+      onError: (m) => show(listMsg, m, "error"),
+    });
+    let hint = null;
+    if (d.room_id == null) {
+      hint = el("div", { class: "room-hint" }, el("a", { href: "#/sensors" },
+        "No room — assign one so it can join incidents"));
+      hint.firstChild.addEventListener("click", (ev) => {
+        ev.preventDefault(); // not a route change: just move to the room select below
+        picker.focus();
+      });
+    }
     return el("article", { class: `device-row sensor-${d.status}` },
       el("span", { class: "dot", "aria-hidden": "true" }),
       el("div", { class: "device-main" },
         el("div", { class: "sensor-name" }, d.name),
+        el("div", { class: "sensor-badges" }, capabilityBadge(d)),
         el("div", { class: "sensor-sub" },
           [kind, el("span", { class: "device-state" }, state), when].filter(Boolean)
             .flatMap((x, i) => (i ? [" · ", x] : [x]))),
@@ -177,10 +191,7 @@ export async function sensorsView() {
           : null,
         d.room_name ? el("div", { class: "sensor-sub" }, "Room: ", d.room_name) : null,
         hasVideo(d) ? cameraExtras(d) : null,
-        roomSelect(d, rooms, {
-          onSaved: () => { show(listMsg, ""); refresh(); },
-          onError: (m) => show(listMsg, m, "error"),
-        })),
+        hint, picker),
       remove);
   }
 
@@ -199,10 +210,13 @@ export async function sensorsView() {
     required: true, placeholder: "e.g. Kitchen" });
   const kindSelect = el("select", { id: "pair-kind", name: "kind" },
     KIND_OPTIONS.map(([v, label]) => el("option", { value: v }, label)));
+  const pairRoom = el("select", { id: "pair-room", name: "pair-room" });
+  const pairRoomNote = el("div", { class: "pair-room-note", role: "status" });
   const submit = el("button", { type: "submit", class: "btn" }, "Create pairing code");
   const form = el("form", { class: "pair-form", novalidate: true },
     name, el("div", { class: "field" }, el("label", { for: "pair-kind" }, "Kind"), kindSelect),
-    submit);
+    el("div", { class: "field" }, el("label", { for: "pair-room" }, "Room (optional)"), pairRoom),
+    pairRoomNote, submit);
   let deadline = 0;
   let expiryEl = null;
 
@@ -247,13 +261,15 @@ export async function sensorsView() {
     submit.disabled = true;
     show(formMsg, "");
     try {
-      const out = await request("POST", "/devices/pairing-codes",
-        { name: value, kind: kindSelect.value });
+      const body = { name: value, kind: kindSelect.value };
+      if (pairRoom.value) body.room_id = Number(pairRoom.value);
+      const out = await request("POST", "/devices/pairing-codes", body);
       if (closed) return;
       // The server's clock sets expires_at; showCode clamps it so a skewed browser clock
       // can't show more than the real 10 minutes (or a negative time).
       showCode(result, out, value);
       input.value = "";
+      suggestMic.reset();
     } catch (err) {
       show(formMsg, err.detail || err.message, "error");
     } finally {
@@ -278,14 +294,41 @@ export async function sensorsView() {
         "Everyone who may be on this camera knows about it")),
     camSubmit);
 
-  function renderRoomPick() {
-    const current = roomPick.value;
-    roomPick.replaceChildren(
-      el("option", { value: "" }, rooms.length ? "Choose a room" : "No rooms yet"),
+  function fillPick(select, placeholder) {
+    const current = select.value;
+    select.replaceChildren(
+      el("option", { value: "" }, placeholder),
       ...rooms.map((r) => el("option", { value: String(r.id) }, r.name)));
-    roomPick.value = rooms.some((r) => String(r.id) === current) ? current : "";
+    select.value = rooms.some((r) => String(r.id) === current) ? current : "";
+  }
+
+  function renderRoomPick() {
+    fillPick(roomPick, rooms.length ? "Choose a room" : "No rooms yet");
+    fillPick(pairRoom, rooms.length ? "No room" : "No rooms yet");
+    pairRoomNote.hidden = rooms.length > 0;
+    pairRoomNote.replaceChildren("No rooms yet. Create one in ",
+      el("a", { href: "#/rooms" }, "Rooms"), " so alerts can say where they come from.");
     showRoomNotice();
   }
+
+  // Suggests "<Room> mic" / "<Room> camera" in a name box while the person hasn't typed
+  // their own: the box is empty or still holds our last suggestion.
+  function suggester(input, select, suffix) {
+    let last = "";
+    const api = {
+      update() {
+        if (input.value !== "" && input.value !== last) return;
+        const room = rooms.find((r) => String(r.id) === select.value);
+        last = room ? `${room.name} ${suffix}`.slice(0, 80) : "";
+        input.value = last;
+      },
+      reset() { last = ""; },
+    };
+    select.addEventListener("change", api.update);
+    return api;
+  }
+  const suggestMic = suggester(name.querySelector("input"), pairRoom, "mic");
+  const suggestCamera = suggester(camName.querySelector("input"), roomPick, "camera");
 
   function showRoomNotice() {
     const room = rooms.find((r) => String(r.id) === roomPick.value);
@@ -329,6 +372,7 @@ export async function sensorsView() {
       if (closed) return;
       showCode(camResult, out, value);
       input.value = "";
+      suggestCamera.reset();
       consent.checked = false;
     } catch (err) {
       show(camMsg, err.detail || err.message, "error");

@@ -91,7 +91,7 @@ export async function overviewView(_params, { household }) {
   function addAlerts(rows) {
     for (const a of rows) {
       alerts.set(a.id, {
-        event_id: a.event_id, label: a.label, device_name: a.device_name, at: a.created_at,
+        event_id: a.event_id, label: a.label, device_name: a.device_name, room_name: a.room_name, at: a.created_at,
         test: a.sound_key === "test",
       });
     }
@@ -257,7 +257,8 @@ export async function overviewView(_params, { household }) {
       const row = el("tr", {},
         el("td", { class: "cell-time" }, fmt.time(new Date(e.received_at))),
         el("td", { class: "cell-sound" }, e.label),
-        el("td", {}, e.device_name || "Removed sensor"),
+        el("td", {}, e.device_name || "Removed sensor",
+          e.room_name ? [" · ", el("span", { class: "cell-room" }, e.room_name)] : null),
         el("td", { class: "col-conf" }, Number(e.confidence).toFixed(2)),
         el("td", {}, el("span", { class: `chip ${cls}` }, text),
           e.has_snapshot ? photoButton(e) : null));
@@ -434,7 +435,7 @@ export async function overviewView(_params, { household }) {
     switch (msg.kind) {
       case "event":
         addEvents([{
-          id: msg.event_id, label: msg.label, device_name: msg.device_name,
+          id: msg.event_id, label: msg.label, device_name: msg.device_name, room_name: msg.room_name,
           confidence: msg.confidence, received_at: msg.received_at, merged: msg.merged,
           has_snapshot: Boolean(msg.has_snapshot),
         }]);

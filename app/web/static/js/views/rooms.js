@@ -11,6 +11,15 @@ export const PRIVATE_KINDS = new Set(["bedroom", "bathroom"]);
 
 const kindLabel = (k) => (ROOM_KINDS.find(([v]) => v === k) || [0, "Other"])[1];
 
+const CAPABILITY_LABELS = { audio: "Microphone", video: "Camera", "audio,video": "Microphone + Camera" };
+
+// What a sensor does, as a small text badge (capabilities: audio, video or audio,video).
+export function capabilityBadge(device) {
+  const label = Object.hasOwn(CAPABILITY_LABELS, device.capabilities)
+    ? CAPABILITY_LABELS[device.capabilities] : CAPABILITY_LABELS.audio;
+  return el("span", { class: "badge badge-cap cap-badge" }, label);
+}
+
 // A "Room for <device>" select that saves on change. `onSaved(updatedDevice)` after success,
 // `onError(message)` on failure (the select goes back to the saved room).
 export function roomSelect(device, rooms, { onSaved, onError }) {
@@ -56,6 +65,7 @@ export async function roomsView() {
   function deviceLine(d) {
     return el("li", { class: "room-device" },
       el("span", { class: "room-device-name" }, d.name),
+      capabilityBadge(d),
       roomSelect(d, rooms, {
         onSaved: () => { show(listMsg, ""); reload().catch(() => {}); },
         onError: (m) => show(listMsg, m, "error"),

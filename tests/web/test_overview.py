@@ -287,7 +287,7 @@ def test_phone_width_shows_the_result_chip_without_scrolling(new_page, live, wid
         page.add_init_script(
             "document.addEventListener('DOMContentLoaded', () => {"
             "const s = document.createElement('style');"
-            f"s.textContent = \"{WIDE_FONT}\"; document.head.append(s); }});"
+            f's.textContent = "{WIDE_FONT}"; document.head.append(s); }});'
         )
     m = _member(live)
     hall = _device(live, m, "A sensor with a fairly long name")

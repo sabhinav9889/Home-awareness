@@ -115,7 +115,7 @@ async function catchUp() {
   for (const a of missed) {
     added = onAlert({
       alert_id: a.id, event_id: a.event_id, label: a.label, device_name: a.device_name,
-      at: a.created_at, popup: prefs.popup || prefs.alarm, alarm: false, // one beep, below
+      room_name: a.room_name, at: a.created_at, popup: prefs.popup || prefs.alarm, alarm: false, // one beep, below
     }) || added;
   }
   if (added && prefs.alarm) {
@@ -140,6 +140,7 @@ function onAlert(msg) {
     test: msg.event_id == null,
     label: msg.label || "Alert",
     device: msg.device_name,
+    room: msg.room_name || null,
     at: msg.at,
     state: "open", // "open" | "handled"
     by: null,
@@ -155,7 +156,7 @@ function onAlert(msg) {
   while (queue.length > KEEP_QUEUED) dispose(queue.shift());
   if (item.photo === "loading") loadPhoto(item);
   item.note = notifyIfHidden(item.label,
-    item.test ? "Test alert from Home Awareness" : `${item.device || "A sensor"} · ${time(item.at)}`,
+    item.test ? "Test alert from Home Awareness" : `${item.device || "A sensor"}${item.room ? ` in ${item.room}` : ""} · ${time(item.at)}`,
     key);
   if (msg.alarm) {
     silence();
@@ -326,7 +327,9 @@ function content(item, more) {
     el("div", { class: "alert-main" },
       icon(),
       el("h1", { id: "alert-title" }, item.label),
-      item.test ? null : el("div", { class: "alert-device" }, item.device || "A sensor"),
+      item.test ? null : el("div", { id: "alert-where", class: "alert-device" },
+        item.room ? [el("strong", { class: "alert-room" }, item.room),
+          ` · via ${item.device || "a sensor"}`] : (item.device || "A sensor")),
       photoBlock(item),
       el("div", { id: "alert-desc", class: "alert-sub" },
         item.test ? `Your alerts reach this dashboard${at ? ` · ${at}` : ""}` : at),
@@ -361,7 +364,7 @@ function render() {
     screen = el("div", {
       class: "alert-screen", role: "alertdialog", "aria-modal": "true",
       "aria-live": "assertive", "aria-labelledby": "alert-title",
-      "aria-describedby": "alert-desc", tabindex: "-1",
+      "aria-describedby": "alert-where alert-desc", tabindex: "-1",
     });
     document.body.append(screen);
     setInert(true);

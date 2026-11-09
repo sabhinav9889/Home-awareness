@@ -192,7 +192,7 @@ h2 { font-size: 16px; }
   margin-top: 6px; padding: 4px 8px; border-radius: 6px; font-size: 13px;
   background: var(--amber-bg); color: var(--amber-ink); border: 1px solid var(--amber);
 }
-.sensor-name { font-weight: 600; font-size: 16px; }
+.sensor-name { font-weight: 600; font-size: 16px; overflow-wrap: anywhere; }
 .sensor-sub { font-size: 13px; color: var(--muted); }
 .empty-note { margin: 0; font-size: 14px; color: var(--muted); }
 
@@ -446,7 +446,7 @@ main h1[tabindex="-1"]:focus { outline: none; } /* focused on each route, not a 
 .cam-snapshots { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cam-consent { color: var(--muted); }
 .cam-form { display: flex; flex-direction: column; gap: 12px; }
-.room-notice { padding: 10px 12px; border-radius: 10px; font-size: 14px; background: var(--bg); color: var(--ink-2); }
+.pair-room-note, .room-notice { padding: 10px 12px; border-radius: 10px; font-size: 14px; background: var(--bg); color: var(--ink-2); }
 .room-notice.is-private { background: var(--amber-bg); color: var(--amber-ink); border: 1px solid var(--amber); }
 .room-notice:empty { display: none; }
 .check-field { display: flex; align-items: flex-start; gap: 10px; }
@@ -465,3 +465,13 @@ main h1[tabindex="-1"]:focus { outline: none; } /* focused on each route, not a 
 .keep-msg { margin: 0; font-size: 14px; color: var(--teal-ink); }
 .keep-msg:empty { display: none; }
 .keep-msg.is-error { color: var(--error-ink); }
+
+/* Which room an alert or a sensor belongs to, and what a sensor does. */
+.alert-device { overflow-wrap: anywhere; }
+.alert-room { font-weight: 800; }
+.events-table .cell-room { color: var(--muted); }
+.badge-cap { background: var(--c-slate-bg); color: var(--c-slate-ink); }
+.sensor-badges { margin: 4px 0; }
+.room-hint { font-size: 13px; margin: 6px 0; }
+.room-hint a { color: var(--amber-ink); text-decoration: underline; }
+.room-device .cap-badge { flex: none; }

@@ -1,8 +1,10 @@
 """Phone-width audit: no view scrolls the page sideways, in either theme or width."""
 
+import httpx
 import pytest
 from playwright.sync_api import expect
 
+from tests.web.test_camera_ui import _room
 from tests.web.test_overview import _device, _event, _heartbeat, _member
 
 pytestmark = pytest.mark.web
@@ -40,6 +42,11 @@ def test_no_horizontal_overflow(new_page, live, hash_, size, scheme):
     if hash_ in PRIVATE:
         m = _member(live, household="A Very Long Household Name For The Audit " * 2)
         d = _device(live, m, name="Living room sensor with a very long name indeed")
+        room = _room(live, m, "A living room whose name is long enough to need wrapping")
+        r = httpx.patch(
+            f"{live.base_url}/devices/{d.id}", json={"room_id": room["id"]}, headers=m.headers
+        )
+        assert r.status_code == 200, r.text
         _heartbeat(live, d)
         _event(live, d, "doorbell")
         page.goto("/app/#/login")
