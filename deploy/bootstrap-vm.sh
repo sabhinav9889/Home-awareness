@@ -15,7 +15,9 @@
 # (1 GB RAM) are too small for this stack; the swap file only softens that, it does not fix it.
 #
 # Test hooks (documented here because the tests use them; never needed in normal use):
-#   BOOTSTRAP_ASSUME_UID   pretend to run as this uid (the root refusal is tested with 0)
+#   BOOTSTRAP_TESTING=1    required for BOOTSTRAP_ASSUME_UID to be honoured at all
+#   BOOTSTRAP_ASSUME_UID   (digits) pretend to run as this uid; the root refusal is tested with 0.
+#                          Without BOOTSTRAP_TESTING=1 the real `id -u` always decides.
 #   BOOTSTRAP_OS_RELEASE   path of the os-release file (default /etc/os-release)
 #   BOOTSTRAP_ETC          prefix for the /etc paths this script reads and writes (default /etc)
 #   BOOTSTRAP_PROC_SWAPS   path of the swap list (default /proc/swaps)
@@ -71,7 +73,12 @@ for arg in "$@"; do
 done
 
 # --- who and where -------------------------------------------------------------------------
-if [[ ${BOOTSTRAP_ASSUME_UID:-$(id -u)} -eq 0 ]]; then
+RUN_UID=$(id -u)
+if [[ ${BOOTSTRAP_TESTING:-} == 1 && -n ${BOOTSTRAP_ASSUME_UID:-} ]]; then
+  [[ $BOOTSTRAP_ASSUME_UID =~ ^[0-9]+$ ]] || die "BOOTSTRAP_ASSUME_UID must be digits" 2
+  RUN_UID=$BOOTSTRAP_ASSUME_UID
+fi
+if ((RUN_UID == 0)); then
   die "do not run this as root. Log in as the normal user (e.g. ubuntu) and run it there; it calls sudo for the individual steps."
 fi
 USER_NAME=$(id -un)
@@ -181,7 +188,13 @@ step_docker() {
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp'" RETURN
     curl -fsSL "$DOCKER_KEY_URL" -o "$tmp/docker.asc"
-    fpr=$(gpg --show-keys --with-colons "$tmp/docker.asc" 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}')
+    local colon npub
+    colon=$(gpg --show-keys --with-colons "$tmp/docker.asc" 2>/dev/null || true)
+    npub=$(awk -F: '$1 == "pub" {n++} END {print n + 0}' <<<"$colon")
+    if [[ $npub != 1 ]]; then
+      die "the downloaded Docker key file must contain exactly one key (found $npub); not installing anything"
+    fi
+    fpr=$(awk -F: '$1 == "fpr" {print $10; exit}' <<<"$colon")
     if [[ $fpr != "$DOCKER_GPG_FPR" ]]; then
       die "Docker's apt key fingerprint does not match the published one (got: ${fpr:-none}); not installing anything"
     fi
@@ -203,7 +216,8 @@ step_group() {
     would "add $USER_NAME to the docker group (log out and in afterwards)"
     return
   fi
-  if id -nG | tr ' ' '\n' | grep -qx docker; then
+  # The group database, not `id`: the current session does not show a membership added earlier.
+  if getent group docker | awk -F: '{print $4}' | tr ',' '\n' | grep -qx "$USER_NAME"; then
     ok "$USER_NAME is in the docker group"
   else
     sudo usermod -aG docker "$USER_NAME"
@@ -213,70 +227,131 @@ step_group() {
 
 # --- 3. firewall ---------------------------------------------------------------------------
 # Oracle's Ubuntu images load iptables rules that ACCEPT SSH and then REJECT everything else,
-# so a rule appended with -A would never match. Rules are inserted before that REJECT rule and
-# also written into the persisted rules file (netfilter-persistent loads it at boot). The SSH
-# rule is never touched, no firewall is enabled or flushed, and ufw is not used.
+# so a rule appended with -A would never match. Rules are inserted before that final REJECT (or
+# DROP) rule and also written into the persisted rules file (netfilter-persistent loads it at
+# boot). The SSH rule is never touched, nothing is flushed, no policy is changed, Docker's chains
+# are never persisted (no `netfilter-persistent save`), and ufw is never installed or removed.
+# IPv4 only. If ufw is installed this step does nothing (installing iptables-persistent would
+# REMOVE ufw) and prints the ufw commands instead.
 RULE_SPECS=("tcp 80" "tcp 443" "udp 443")
+TERMINAL_RE='^-A INPUT -j (REJECT|DROP)( |$)'
 
-input_rules() { sudo iptables -S INPUT | awk '/^-A INPUT /'; }
+input_dump() { sudo iptables -S INPUT; }
 
-reject_pos() { # 1-based position among INPUT rules of the first REJECT rule (empty if none)
-  input_rules | awk '/ -j REJECT/ {print NR; exit}'
+terminal_pos() { # 1-based position among INPUT rules of the first unconditional REJECT/DROP
+  awk -v re="$TERMINAL_RE" '/^-A INPUT /{n++; if ($0 ~ re) {print n; exit}}' <<<"$1"
 }
 
-rule_pos() { # position of an exact ACCEPT rule (empty if absent)
-  local want=$1
-  input_rules | awk -v w="$want" '$0 == w {print NR; exit}'
+rule_pos() { # position of an exact rule line (empty if absent)
+  awk -v w="$2" '/^-A INPUT /{n++; if ($0 == w) {print n; exit}}' <<<"$1"
+}
+
+ufw_message() {
+  warn "ufw is installed, so the firewall step is SKIPPED (installing iptables-persistent would remove ufw)."
+  warn "Run these yourself to open the ports, then check with: sudo ufw status"
+  warn "  sudo ufw allow 80/tcp"
+  warn "  sudo ufw allow 443/tcp"
+  warn "  sudo ufw allow 443/udp"
 }
 
 step_firewall() {
   local spec proto port
   if ((DRY)); then
+    would "if ufw is installed: skip this step and print the ufw allow commands instead"
     for spec in "${RULE_SPECS[@]}"; do
       read -r proto port <<<"$spec"
-      would "open $port/$proto: iptables -I INPUT <before the final REJECT rule> -p $proto -m $proto --dport $port -j ACCEPT (skipped if present)"
+      would "open $port/$proto: iptables -I INPUT <before the final REJECT/DROP rule> -p $proto -m $proto --dport $port -j ACCEPT (skipped if present)"
     done
-    would "persist the rules for reboots (install iptables-persistent if missing; add them to $ETC/iptables/rules.v4 before its REJECT rule, backup kept as rules.v4.ha-bak)"
+    would "persist the rules for reboots (install iptables-persistent if missing; add them to $ETC/iptables/rules.v4 before its REJECT rule through a validated temp file, backup kept as rules.v4.ha-bak)"
+    return
+  fi
+
+  if pkg_installed ufw; then
+    ufw_message
     return
   fi
 
   if ! pkg_installed iptables-persistent || ! pkg_installed netfilter-persistent; then
-    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables-persistent netfilter-persistent \
-      || { apt_update_once && apt_install iptables-persistent netfilter-persistent; }
+    apt_install iptables-persistent netfilter-persistent
     did "installed iptables-persistent"
   fi
 
   local -a lines=()
-  local rp pos
+  local dump tp pos
   for spec in "${RULE_SPECS[@]}"; do
     read -r proto port <<<"$spec"
     local -a spec_args=(-p "$proto" -m "$proto" --dport "$port" -j ACCEPT)
-    lines+=("-A INPUT ${spec_args[*]}")
-    rp=$(reject_pos)
+    local line="-A INPUT ${spec_args[*]}"
+    lines+=("$line")
+    dump=$(input_dump)
+    tp=$(terminal_pos "$dump")
     if sudo iptables -C INPUT "${spec_args[@]}" 2>/dev/null; then
-      pos=$(rule_pos "-A INPUT ${spec_args[*]}")
-      if [[ -z $rp || -z $pos || $pos -lt $rp ]]; then
+      pos=$(rule_pos "$dump" "$line")
+      if [[ -z $tp || $pos -lt $tp ]]; then
         ok "$port/$proto is open"
         continue
       fi
-      warn "$port/$proto is allowed only after the REJECT rule (ineffective); inserting it before"
+      warn "$port/$proto is allowed only after the final REJECT/DROP rule (ineffective); inserting it before"
     fi
-    if [[ -n $rp ]]; then
-      sudo iptables -I INPUT "$rp" "${spec_args[@]}"
+    if [[ -n $tp ]]; then
+      sudo iptables -I INPUT "$tp" "${spec_args[@]}"
+    elif grep -qE '^-A INPUT .*-j (REJECT|DROP)' <<<"$dump"; then
+      die "firewall: the INPUT chain has REJECT/DROP rules but no final one I can safely insert before; open $port/$proto by hand (see deploy/README.md). Nothing was persisted."
     else
-      sudo iptables -A INPUT "${spec_args[@]}"
+      sudo iptables -A INPUT "${spec_args[@]}" # no blocking rule: the end of the chain is safe
+    fi
+    # verify the rule really is ahead of any final REJECT/DROP now
+    dump=$(input_dump)
+    tp=$(terminal_pos "$dump")
+    pos=$(rule_pos "$dump" "$line")
+    if [[ -z $pos ]] || { [[ -n $tp ]] && ((pos > tp)); }; then
+      die "firewall: $port/$proto is not effective after insertion; stopping (check: sudo iptables -S INPUT)"
     fi
     did "opened $port/$proto"
   done
 
-  persist_rules "${lines[@]}"
+  persist_rules "$(input_dump)" "${lines[@]}"
 }
 
-persist_rules() {
-  local f="$ETC/iptables/rules.v4" content missing=() r tmp
+# Rewrite the persisted file through a temp file in the same directory: validate with
+# iptables-restore --test, keep mode and owner, keep a one-time .ha-bak, then mv (atomic).
+write_rules_file() { # content, exists(0/1)
+  local content=$1 exists=$2 f="$ETC/iptables/rules.v4" mode=640 owner=root:root tmpu tmp
+  tmpu=$(mktemp)
+  printf '%s\n' "$content" >"$tmpu"
+  # shellcheck disable=SC2024 # the redirect is meant to be read as the user (tmpu is ours)
+  if ! sudo iptables-restore --test <"$tmpu"; then
+    rm -f "$tmpu"
+    die "firewall: iptables-restore --test rejected the new rules file; $f was not changed"
+  fi
+  if ((exists)); then
+    mode=$(sudo stat -c %a "$f")
+    owner=$(sudo stat -c %U:%G "$f")
+    [[ -e $f.ha-bak ]] || sudo cp -p "$f" "$f.ha-bak"
+  else
+    sudo install -d -m 0755 "$ETC/iptables"
+  fi
+  tmp="$f.new.$$"
+  sudo install -m "$mode" "$tmpu" "$tmp"
+  sudo chown "$owner" "$tmp"
+  sudo mv -f "$tmp" "$f"
+  rm -f "$tmpu"
+}
+
+persist_rules() { # live INPUT dump, then the three rule lines
+  local dump=$1
+  shift
+  local f="$ETC/iptables/rules.v4" content missing=() r new policy
   if ! content=$(sudo cat "$f" 2>/dev/null); then
-    sudo netfilter-persistent save
-    did "saved the current rules to $f"
+    # No file: create it from the INPUT chain only (never Docker's chains or tables).
+    policy=$(awk '/^-P INPUT /{print $3}' <<<"$dump")
+    new=$(
+      printf '*filter\n:INPUT %s [0:0]\n:FORWARD ACCEPT [0:0]\n:OUTPUT ACCEPT [0:0]\n' "${policy:-ACCEPT}"
+      awk '/^-A INPUT /' <<<"$dump"
+      echo COMMIT
+    )
+    write_rules_file "$new" 0
+    did "created $f from the INPUT chain"
     return
   fi
   for r in "$@"; do
@@ -286,19 +361,26 @@ persist_rules() {
     ok "the rules are persisted in $f"
     return
   fi
-  if ! grep -q '^-A INPUT .*-j REJECT' <<<"$content"; then
-    # No REJECT line to anchor on: save the live rules (which already contain ours).
-    sudo netfilter-persistent save
-    did "saved the current rules to $f"
-    return
+  # Insert before the first unconditional INPUT REJECT/DROP of the filter table; if there is
+  # none, after the last INPUT rule of that table (or its :INPUT line).
+  if ! new=$(awk -v rules="$(printf '%s\n' "${missing[@]}")" -v re="$TERMINAL_RE" '
+      { L[NR] = $0; if ($0 ~ /^\*/) t = $0; T[NR] = t }
+      END {
+        ins = 0; last = 0; decl = 0
+        for (i = 1; i <= NR; i++) {
+          if (T[i] != "*filter") continue
+          if (!ins && L[i] ~ re) ins = i
+          if (L[i] ~ /^-A INPUT /) last = i
+          if (L[i] ~ /^:INPUT /) decl = i
+        }
+        if (!ins) ins = last ? last + 1 : (decl ? decl + 1 : 0)
+        if (!ins) exit 3
+        for (i = 1; i <= NR; i++) { if (i == ins) print rules; print L[i] }
+      }' <<<"$content"); then
+    die "firewall: cannot find the filter table's INPUT chain in $f; add these lines by hand: ${missing[*]}"
   fi
-  [[ -e $f.ha-bak ]] || sudo cp -p "$f" "$f.ha-bak"
-  tmp=$(mktemp)
-  awk -v rules="$(printf '%s\n' "${missing[@]}")" \
-    '!done && /^-A INPUT .*-j REJECT/ {print rules; done=1} {print}' <<<"$content" >"$tmp"
-  sudo install -m 0644 "$tmp" "$f"
-  rm -f "$tmp"
-  did "added the rules to $f before its REJECT rule"
+  write_rules_file "$new" 1
+  did "added the rules to $f"
 }
 
 # --- 4. unattended-upgrades ----------------------------------------------------------------

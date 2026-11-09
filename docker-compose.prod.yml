@@ -101,6 +101,7 @@ services:
     image: curlimages/curl:8.11.1
     profiles: ["duckdns"]
     restart: unless-stopped
+    init: true # quick `docker stop`: the script then gets TERM from tini, not as PID 1
     entrypoint: ["sh", "/deploy/duckdns.sh"]
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env.prod}

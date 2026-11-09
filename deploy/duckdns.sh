@@ -9,11 +9,28 @@
 # The token is only ever handed to curl on stdin as a config file (`curl -K -`), so it is not in
 # the process arguments, and curl's stderr is discarded and the URL and response body are never
 # printed. One log line is written per state change (OK or KO), plus the first result.
+#
+# A configuration error never makes the container exit: `up -d --wait` in a deploy would see a
+# restart loop and fail (and roll back a healthy release). Instead the message is logged and the
+# script idles, repeating the message every DUCKDNS_IDLE_INTERVAL seconds (default 3600), and
+# exits 0 on TERM/INT. curl -4 keeps an empty ip= from registering an IPv6 address.
+# Test hooks: DUCKDNS_IDLE_INTERVAL, DUCKDNS_IDLE_MAX_LOOPS (0 = idle forever).
 set -eu
 
-fail() {
-  printf 'duckdns: %s\n' "$*" >&2
-  exit 1
+fail() { # log once, then idle forever (exit 0 on TERM)
+  idle_interval=${DUCKDNS_IDLE_INTERVAL:-3600}
+  idle_max=${DUCKDNS_IDLE_MAX_LOOPS:-0}
+  pid=
+  trap '[ -z "$pid" ] || kill "$pid" 2>/dev/null; exit 0' TERM INT
+  n=0
+  while :; do
+    printf 'duckdns: %s (the updater is idle until this is fixed and the service is recreated)\n' "$*" >&2
+    n=$((n + 1))
+    if [ "$idle_max" -gt 0 ] && [ "$n" -ge "$idle_max" ]; then exit 0; fi
+    sleep "$idle_interval" >/dev/null 2>&1 &
+    pid=$!
+    wait "$pid" || true
+  done
 }
 
 domain=${DOMAIN:-}
@@ -41,7 +58,7 @@ esac
 
 update() { # prints OK or KO; never the URL, the token or the response
   resp=$(printf 'url = "https://www.duckdns.org/update?domains=%s&token=%s&ip="\n' "$sub" "$token" \
-    | curl --silent --max-time 30 -K - 2>/dev/null) || resp=""
+    | curl -4 --silent --max-time 30 -K - 2>/dev/null) || resp=""
   if [ "$resp" = "OK" ]; then echo OK; else echo KO; fi
 }
 

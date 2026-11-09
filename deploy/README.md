@@ -136,8 +136,15 @@ if there is no swap. A second run changes nothing and says so.
 
 **Oracle firewall.** Oracle's Ubuntu images load iptables rules that accept SSH and then REJECT
 everything else. The script inserts its rules before that REJECT rule (never touching the SSH rule)
-and writes them into `/etc/iptables/rules.v4` so they survive a reboot (a backup is kept as
-`rules.v4.ha-bak`). It does not install or enable ufw. The cloud firewall is separate: also add
+and writes them into `/etc/iptables/rules.v4` so they survive a reboot. That file is rewritten
+through a temp file checked with `iptables-restore --test`, keeping its mode and owner, and the
+first original is kept as `rules.v4.ha-bak` (never overwritten). If the file is missing it is created
+from the INPUT chain only; Docker's chains are never persisted. If the INPUT chain has no safe
+insertion point the script stops with an error instead of pretending. It never enables a firewall.
+**If ufw is installed the firewall step is skipped** (installing `iptables-persistent` would remove
+ufw) and the script prints `sudo ufw allow 80/tcp`, `443/tcp` and `443/udp` for you to run yourself.
+The firewall step is IPv4 only: if the VM ever gets IPv6, add the same three ACCEPT rules with
+`ip6tables` (and persist them in `/etc/iptables/rules.v6`) or the ports stay closed over IPv6. The cloud firewall is separate: also add
 ingress rules for TCP 80, TCP 443 and UDP 443 to the VCN security list or network security group.
 
 After it finishes it prints the remaining manual steps: log out and in (docker group), clone the
@@ -169,3 +176,20 @@ not one per check. Look at it with `docker compose ... logs duckdns`.
 create an UptimeRobot account, add an HTTP(s) monitor for `https://DOMAIN/health` with a 5 minute
 interval and alert contacts of your choice. Pair it with the Oracle rule of signing in at least
 every 60 days so the always-free account stays active.
+
+## Operating notes
+
+- The `docker` group is root-equivalent: anyone in it can take over the VM. Keep it to your own user.
+- `unattended-upgrades` installs security updates but never reboots by design. After a kernel update
+  (`/var/run/reboot-required` exists) reboot once in a while: `sudo reboot`, then check the stack came
+  back (`restart: unless-stopped` starts it).
+- `deploy/duckdns.sh` is bind-mounted as a single file, so a deploy that changes it may leave the
+  running container on the old inode. After such a deploy run
+  `docker compose ... --profile duckdns up -d --force-recreate duckdns`.
+- A misconfigured DuckDNS service (bad `DOMAIN`, missing token) does not fail deploys: it logs the
+  reason and idles, repeating it hourly. Fix `deploy/.env.prod`, then recreate the service as above.
+  Its `curl -4` always uses IPv4, so DuckDNS never records an IPv6 address.
+- **/metrics is hidden.** Caddy answers 404 for `/metrics` (and anything below it), because the
+  endpoint has no authentication and shows activity counters. Read it from inside the stack:
+  `docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file deploy/.env.prod
+  -p home-awareness exec api python -c "import urllib.request as u;print(u.urlopen('http://localhost:8000/metrics').read().decode())"`.

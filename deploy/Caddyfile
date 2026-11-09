@@ -29,7 +29,16 @@
 
 	# The api trusts X-Forwarded-For from any peer, so Caddy must never pass a client-supplied
 	# value on: always replace it with the address Caddy actually saw.
-	reverse_proxy api:8000 {
-		header_up X-Forwarded-For {remote_host}
+	# /metrics has no authentication and shows activity counters: never expose it publicly.
+	# (Read it from inside the network; see deploy/README.md.)
+	@metrics path /metrics /metrics/*
+	handle @metrics {
+		respond "Not Found" 404
+	}
+
+	handle {
+		reverse_proxy api:8000 {
+			header_up X-Forwarded-For {remote_host}
+		}
 	}
 }
