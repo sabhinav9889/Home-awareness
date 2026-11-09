@@ -521,10 +521,15 @@ def _docker_up() -> bool:
 def _dc(*args: str, check=True, stdin: str | None = None, timeout=240):
     env = {k: v for k, v in os.environ.items() if k not in DRILL_ENV}
     env.update(DRILL_ENV)
-    r = subprocess.run(
-        [*COMPOSE, *args], cwd=ROOT, env=env, capture_output=True, text=True, input=stdin,
-        timeout=timeout,
-    )  # fmt: skip
+    for attempt in range(4):
+        r = subprocess.run(
+            [*COMPOSE, *args], cwd=ROOT, env=env, capture_output=True, text=True, input=stdin,
+            timeout=timeout,
+        )  # fmt: skip
+        # Docker's embedded DNS occasionally answers "Try again" right after a container starts.
+        if "could not translate host name" not in r.stderr + r.stdout or attempt == 3:
+            break
+        time.sleep(2)
     if check:
         assert r.returncode == 0, (args, r.stdout, r.stderr)
     return r
