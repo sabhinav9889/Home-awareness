@@ -180,6 +180,7 @@ async def test_guarding_off_never_runs_object_model(mock):
     assert obj.calls == 0 and events(mock) == []
 
 
+@pytest.mark.camera
 async def test_guarding_flip_on_starts_person_events_within_15s(mock):
     ft = FakeTime()
     off = cfg_json(guarding=False, enabled=["person_away"])
@@ -194,6 +195,7 @@ async def test_guarding_flip_on_starts_person_events_within_15s(mock):
     assert timedelta(seconds=15) <= at - T0 <= timedelta(seconds=17)
 
 
+@pytest.mark.camera
 async def test_guarding_flips_off_stops_object_model(mock):
     ft = FakeTime()
     on = cfg_json(guarding=True, enabled=["person_away"])
@@ -206,6 +208,7 @@ async def test_guarding_flips_off_stops_object_model(mock):
     assert 0 < calls_at_end <= 15 * 4 + 2
 
 
+@pytest.mark.camera
 async def test_snapshot_from_triggering_frame_and_occurred_at(mock):
     ft = FakeTime()
     setup_server(mock, cfg_json(enabled=["weapon_seen"]))
@@ -235,6 +238,7 @@ async def test_send_snapshots_false_posts_json_and_never_encodes(mock, monkeypat
     assert body(req)["type"] == "weapon_seen"
 
 
+@pytest.mark.camera
 async def test_person_for_ten_minutes_gives_two_events(mock):
     ft = FakeTime()
     setup_server(mock, cfg_json(guarding=True, enabled=["person_away"]))
@@ -300,6 +304,7 @@ async def test_lying_still_passes_t_with_none_samples():
     assert seen == [(None, 7.5)]
 
 
+@pytest.mark.camera
 async def test_camera_busy_at_start_retries_and_heartbeats(mock, caplog):
     ft = FakeTime()
     setup_server(mock, cfg_json(enabled=["weapon_seen"], hb=4))
@@ -323,6 +328,7 @@ async def test_camera_busy_at_start_retries_and_heartbeats(mock, caplog):
     assert len(events(mock)) == 1
 
 
+@pytest.mark.camera
 async def test_frames_stop_for_3s_logs_once_and_reopens(mock, caplog):
     ft = FakeTime()
     setup_server(mock, cfg_json(enabled=["weapon_seen"]))
@@ -368,6 +374,7 @@ async def test_stop_closes_source_and_models(mock):
     assert (src.closed, pose.closed, obj.closed) == (1, 1, 1)
 
 
+@pytest.mark.camera
 async def test_server_down_events_queue_and_loop_continues(mock):
     ft = FakeTime()
     mock.post("/device/heartbeat").respond(200, json=cfg_json(enabled=["weapon_seen"]))
@@ -469,6 +476,7 @@ async def test_queued_person_event_not_sent_after_guarding_goes_off(mock):
     assert delivered == []
 
 
+@pytest.mark.camera
 async def test_snapshot_flip_at_refresh_applies_to_next_event(mock):
     ft = FakeTime()
     on = cfg_json(enabled=["weapon_seen"], snapshots=True)
@@ -482,6 +490,7 @@ async def test_snapshot_flip_at_refresh_applies_to_next_event(mock):
     assert second.headers["content-type"] == "application/json"
 
 
+@pytest.mark.camera
 async def test_snapshot_flip_off_strips_images_from_queued_events(mock):
     ft = FakeTime()
     on = cfg_json(enabled=["weapon_seen"], snapshots=True)
