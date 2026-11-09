@@ -12,7 +12,10 @@ Everything here is true of the code in this repo. If you can't explain a line be
 - Built a Linux **edge client** (PipeWire capture, TFLite inference at ~3.4 ms/window, playback-aware thresholds, clipping detection) and a **no-framework web dashboard** with a live alert screen; **~600 automated tests** including real-browser Playwright tests; Docker Compose + GitHub Actions CI.
 - **Measured** detection on 2,000 ESC-50 clips and used live testing to tune label rules — cut glass-breaking false alarms from 6 to 2 (precision 0.85 → 0.94).
 
-Numbers you can quote: ~3,900 lines of server Python, ~3,000 edge Python, ~2,400 JS; 317 server + 277 edge test functions; 38 HTTP/WebSocket routes; 14 migrations; 148 commits.
+- Extended it with **camera sensors**: on-device pose and object detection (MediaPipe) raises falls, "lying still", and "person while the house is guarding" alerts; **video never leaves the device** — only one small JPEG per alert, **Fernet-encrypted at rest**, retention-limited (1/7/30 days) and visible only to household members. A Redis-backed **correlation step** combines sensors in the same room into follow-up incidents ("possible break-in" = glass + person within 15 s).
+- Wrote the **production deployment tooling** for a $0 Oracle Always Free VM: Docker Compose + Caddy automatic HTTPS, a deploy script with health-checked **rollback**, GitHub Actions auto-deploy gated on CI and a pinned SSH host key, nightly `pg_dump` backups with a tested restore, and a VM bootstrap script. Verified end to end locally; **not yet run on a real VM** (say so if asked).
+
+Numbers you can quote (measured 9 Nov 2026): ~5,200 lines of server Python, ~4,600 edge Python, ~3,100 JS, ~1,100 shell; 613 server + 429 edge test functions (about 1,000 tests, including real-browser Playwright tests and a real-Postgres backup/restore drill); 47 HTTP/WebSocket routes; 17 migrations; 192 commits.
 
 ---
 
@@ -43,6 +46,18 @@ Walk one alert end to end:
 6. Dashboard shows a full-screen alert; "I'm on it" acknowledges it for the whole household.
 
 ---
+
+### Add these two boxes if they ask about cameras or hosting
+
+```
+[Camera: ha-camera]--event + 1 JPEG (multipart)-->[FastAPI]-->[Redis: per-room window]--> follow-up "incident" alert
+ (pose + object models on device)                     |
+                                                 [encrypted snapshot on a volume, swept by retention]
+
+[Internet]--HTTPS-->[Caddy]-->[FastAPI]   (only Caddy publishes ports; db/redis/api are internal)
+                      |
+              [backup service: nightly pg_dump, restore script]      [GitHub Actions --SSH--> deploy.sh: build, migrate, health check, rollback]
+```
 
 ## 4. Deep-dive questions and good answers
 
@@ -113,12 +128,45 @@ Pick one you can explain fully:
 
 ---
 
+### Cameras, privacy and incidents
+**Isn't a camera a big privacy step? How did you limit it?**
+Analysis happens on the device; video is never streamed, recorded or stored. When something alerts, **one** JPEG (longest side 640 px, ≤ 300 KB, from a frame at most 1 s old) goes with the event. The server encrypts it with Fernet before writing it to a volume, keeps it 1, 7 or 30 days (owner's choice, 200 MB cap per household), and only household members can fetch it. Each camera has a "Send snapshots" switch, and adding a camera requires a consent tick; cameras in bedrooms or bathrooms default to photos off. No face recognition, by design. Honest limit: ntfy and Telegram copies leave my control.
+
+**How do you combine microphone and camera?**
+Devices belong to rooms. After the normal alert path commits, a correlation step keeps a 30 s Redis sorted set per room and household; when glass breaking and a person event are both in the window (15 s), it creates a *follow-up* incident alert. Incidents never delay the individual alerts, and a `SET NX EX 60` key stops a rule firing twice. Failures there are caught and can't affect the original event's response — a review found my first version could still turn a rolled-back session into a 500 on the ingredient response, so the response is built before the incident step.
+
+**How does fall detection work, and how good is it?**
+Pose landmarks give a torso line; a fall is "upright to horizontal with the hips dropping within about a second", lying-still is "horizontal and nearly motionless for two minutes". It refuses to judge when shoulders or hips aren't visible, which on a laptop webcam is most of the time. It's tested on synthetic landmark streams, **not measured on real falls**. A review also found I had ignored the video's aspect ratio when computing angles (a true 45° read as 29° at 16:9); fixing that meant scaling x by width/height.
+
+**Why is weapon detection off by default?**
+Because it's wrong: in my own live test it raised six alerts at 0.42–0.48 confidence, and the two snapshots I opened showed a phone held near the lens and a hand — no weapon. I would only trust it after adding a "held by a hand" check, a sustained-detection rule and measured precision.
+
+### Deployment and operations
+**How do you deploy, and what happens if a deploy fails?**
+`deploy.sh` on the VM: validate the git ref, take a lock, fast-forward only, build, run migrations as a separate step, `up --wait`, then a health check against the local Caddy. On failure it rolls back api/worker/beat to the last healthy commit *without* re-running migrations (an old image can't run a newer schema's `alembic upgrade`). Migrations are forward-only by policy, so they must be additive. The GitHub workflow only deploys a commit CI passed on `main`, over SSH with a pinned host key, detached from the SSH session so a dropped connection can't kill it mid-switch.
+
+**What security problems did you find in the deployment?**
+Reviews found: Caddy's error log recorded `?token=` URLs and device keys on every 502; a public `/metrics` page; rate limits that would have seen every client as the proxy (fixed with explicit `X-Forwarded-For` handling and verified with forged headers); a restore script that could empty the live database on a bad dump (now one transaction plus pre-validation); and a secrets generator whose `--force` wiped settings.
+
+**Backups?**
+Nightly `pg_dump` (plain SQL, restores anywhere including Neon), 14 daily plus weekly retention, 0600 files, atomic writes, a timeout, and a **tested** restore into a scratch database. Photos are deliberately excluded (short-lived, encrypted); the `SNAPSHOT_KEY` must be stored separately or old photos are unreadable.
+
+**Is it running in production?**
+Say it straight: the tooling is complete and verified locally with a full production-stack run, but at the time of writing it has **not yet been deployed to a real VM**. (Update this line once it has.)
+
+### What went wrong (good stories)
+- **A mocked test hid a startup crash.** `ha-camera run` crashed on launch because the CLI looked up a class in the wrong module, and every CLI test replaced that function with a fake. An end-to-end review that ran the real path found it. Lesson: mock at the edges, and run the real path once.
+- **Real model, real crash.** Closing the MediaPipe model while a worker thread was still inside `detect` exited with SIGSEGV 3 times out of 3. Fixed by waiting for the in-flight inference before closing.
+- **A build agent migrated my live database.** A test command broke halfway and an agent's `alembic` ran against the live database because the worktree's `.env` pointed at it. Additive tables only, nothing lost, but it's why subagent prompts now forbid database tools and the worktrees have no `.env`.
+
 ## 5. Trade-offs and "what would you change?"
 
 - **Scale:** single VM; next steps would be partitioning events by time, a managed queue, horizontal API workers behind the proxy (the API is stateless; live fan-out already goes through Redis pub/sub).
 - **Model:** scream detection is weak for shouted/close-mic screams; I'd fine-tune or add a second model on scream-specific data.
 - **At-most-once** loses an alert after a worker crash mid-send; a stuck-alert sweep makes it visible. I'd add an idempotent outbox with per-channel dedup keys for at-least-once if channels supported it.
-- **Phone as sensor** (browser mic + in-browser model) is designed but not built; needs HTTPS.
+- **Phone as sensor** (browser mic + camera with in-browser models) is designed but not built; it needs HTTPS, which the cloud deployment provides.
+- **Cameras:** fall, lying-still and weapon detection are not measured on real people; a laptop webcam can't see a whole body. Accuracy work needs a feedback loop ("real / false alarm" on each alert) and a public fall dataset.
+- **Deployment:** untested on a real VM (Arm image builds, Oracle firewall, certificate issuance); migrations are forward-only, so rollbacks only cover the application containers.
 
 ---
 
@@ -136,7 +184,7 @@ Pick one you can explain fully:
 You built this with AI coding agents: you set the product direction and constraints, approved the design, and every change went through test-first development, independent code review and fix rounds. Interviewers increasingly ask about this. Say it plainly, then show you own it:
 
 - "I used AI agents to implement under a strict process: written design, step-by-step plans, tests first, an independent reviewer per task, and a whole-branch review before every merge. My job was the product decisions, the trade-offs, and verifying — like the live testing that found the doorbell and glass problems."
-- **The risk:** if you can't explain a part, it shows. Before interviews, read and be able to explain at least: `app/tenancy.py`, `app/rules/engine.py`, `app/alerts/delivery.py`, `app/live/router.py`, `edge/src/ha_edge/detector.py`, `edge/src/ha_edge/labels.py`.
+- **The risk:** if you can't explain a part, it shows. Before interviews, read and be able to explain at least: `app/tenancy.py`, `app/rules/engine.py`, `app/alerts/delivery.py`, `app/live/router.py`, `edge/src/ha_edge/detector.py`, `edge/src/ha_edge/labels.py`, and for the newer parts `app/snapshots/store.py`, `app/rules/incidents.py`, `edge/src/ha_edge/camera/pose_rules.py`, `edge/src/ha_edge/camera/runner.py`, `deploy/deploy.sh` and `deploy/Caddyfile`.
 
 ---
 
