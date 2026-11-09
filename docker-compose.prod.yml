@@ -93,6 +93,8 @@ services:
       - ./deploy/restore.sh:/deploy/restore.sh:ro
     depends_on:
       db: {condition: service_healthy}
+      # the first backup runs at container start: the schema must exist by then
+      migrate: {condition: service_completed_successfully}
     logging: *logging
 
   # Optional dynamic DNS for a free DuckDNS name. Off by default; enable with

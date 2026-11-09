@@ -787,3 +787,11 @@ def test_caddyfile_hides_metrics():
     assert "path /metrics /metrics/*" in text
     assert "respond" in text and "404" in text
     assert text.index("/metrics") < text.index("reverse_proxy")
+
+
+def test_next_steps_start_on_staging_before_using_deploy_sh():
+    text = (ROOT / "deploy" / "bootstrap-vm.sh").read_text()
+    steps = text.split("Remaining manual steps", 1)[1]
+    assert "up -d --build" in steps
+    assert "ACME_CA" in steps
+    assert "First deploy:           deploy/deploy.sh" not in steps

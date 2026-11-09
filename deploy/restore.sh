@@ -59,7 +59,7 @@ else
   if ((existing > 0)); then
     ((OVERWRITE == 1)) || die "database $TARGET already contains $existing tables; use a new name or pass --yes-overwrite"
     # Not executed here: it is sent in the same transaction as the load below.
-    CLEAR_SQL="DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+    CLEAR_SQL="SET client_min_messages=warning; DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
     while IFS= read -r stmt; do
       [[ -n $stmt ]] && CLEAR_SQL+=" $stmt"
     done < <(psql_db -Atc "SELECT format('DROP SCHEMA %I CASCADE;', nspname) FROM pg_namespace WHERE nspname NOT IN ('public', 'information_schema') AND nspname NOT LIKE 'pg_%'")

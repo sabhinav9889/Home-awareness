@@ -95,6 +95,18 @@ main() {
     done
   }
 
+  # Probe with certificate checks off: tells "the app is up but the certificate is not trusted"
+  # (ACME staging, or still being issued) apart from "the app is down".
+  tls_untrusted() {
+    curl -fsS --max-time 5 -k "${curl_extra[@]}" ${curl_user[@]+"${curl_user[@]}"} "$health_url" \
+      >/dev/null 2>&1
+  }
+  tls_note() {
+    warn "deploy: the app is up but its TLS certificate is not trusted (ACME staging, or the"
+    warn "deploy: certificate is still being issued). Check ACME_CA in deploy/.env.prod, then see"
+    warn "deploy: docs/deploy-oracle.md (staging first, then the production CA)."
+  }
+
   migration_files() { # sorted migration file names at a commit
     git ls-tree -r --name-only "$1" -- migrations/versions | grep -E '\.py$' | sort || true
   }
@@ -143,9 +155,15 @@ main() {
 
   # After a manual bootstrap there is no .last_good. If the stack is healthy right now, the
   # current checkout is the rollback target (so a failed first automatic deploy rolls back).
-  if [[ -z $last_good ]] && health_once; then
-    last_good=$prev
-    say "deploy: the running stack is healthy; $prev is the rollback target"
+  if [[ -z $last_good ]]; then
+    if health_once; then
+      last_good=$prev
+      say "deploy: the running stack is healthy; $prev is the rollback target"
+    elif tls_untrusted; then
+      tls_note
+      warn "deploy: refusing to deploy; nothing was changed"
+      return 1
+    fi
   fi
 
   say "deploy: $prev -> $target (rollback target: ${last_good:-none, first deploy})"
@@ -158,7 +176,7 @@ main() {
   }
 
   # --- build and migrate: failing here leaves the running version untouched ---
-  if ! dc build; then
+  if ! dc build --pull; then
     restore_tree
     warn "deploy: FAILED at build; nothing was changed, the old version keeps running"
     tags_note
@@ -171,8 +189,40 @@ main() {
     return 1
   fi
 
+  # Single-file bind mounts (Caddyfile, backup/restore/duckdns scripts) are replaced by git with
+  # a new inode, so a running container keeps the old file and compose does not recreate it.
+  # Recreate the affected services when their file changed (known deploy history only).
+  local -a recreate=()
+  if [[ -n $last_good && $prev != "$target" ]]; then
+    local changed enabled
+    changed=$(git diff --name-only "$prev" "$target" || true)
+    enabled=$(dc config --services 2>/dev/null || true)
+    add_recreate() { # service, files that feed it
+      local svc=$1 f
+      shift
+      grep -qx "$svc" <<<"$enabled" || return 0
+      for f in "$@"; do
+        if grep -qx "$f" <<<"$changed"; then
+          recreate+=("$svc")
+          return 0
+        fi
+      done
+    }
+    add_recreate caddy deploy/Caddyfile
+    add_recreate backup deploy/backup.sh deploy/restore.sh
+    add_recreate duckdns deploy/duckdns.sh
+  fi
+
   # --- switch ---
-  if dc up -d --wait --wait-timeout 120 && healthy; then
+  local up_ok=1
+  if dc up -d --wait --wait-timeout 120; then
+    up_ok=0
+    if ((${#recreate[@]} > 0)); then
+      say "deploy: recreating services whose mounted file changed: ${recreate[*]}"
+      dc up -d --force-recreate --no-deps "${recreate[@]}" || up_ok=1
+    fi
+  fi
+  if ((up_ok == 0)) && healthy; then
     printf '%s\n' "$target" >"$last_good_file.tmp"
     mv "$last_good_file.tmp" "$last_good_file"
     docker image prune -f || true # dangling images only; the host may run other projects
@@ -181,6 +231,13 @@ main() {
   fi
 
   # --- the new version is not healthy ---
+  if ((up_ok == 0)) && tls_untrusted; then
+    # Up, but not trusted: not a broken release. Leave everything running; never stop or roll
+    # back a site that only has the wrong certificate.
+    warn "deploy: $target is running but the deploy is NOT marked good"
+    tls_note
+    return 1
+  fi
   warn "deploy: new version $target failed its start or health check"
   if [[ -z $last_good ]]; then
     warn "deploy: FIRST DEPLOY FAILED, there is no previous good version to roll back to."

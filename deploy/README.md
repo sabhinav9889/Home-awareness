@@ -13,7 +13,7 @@ scheduled backups. A failed run is retried after an hour.
 
 - Format: plain SQL, gzipped, `--no-owner --no-privileges`. Plain SQL restores with `psql` into any
   Postgres, including a hosted one (Neon) if you ever move off the VM.
-- Written as `.part`, verified (`gzip -t`, contains `CREATE TABLE`), then renamed, so a failed
+- Written as `.part`, verified (`gzip -t`, contains `CREATE TABLE` and pg_dump's `dump complete` trailer), then renamed, so a failed
   or interrupted run never leaves a truncated backup and never deletes older ones.
 - Retention: one file per day for the newest 14 days, plus the newest 8 Sunday files older than
   that. The rest are deleted (by the timestamp in the name).
@@ -93,12 +93,21 @@ does the same without the crontab line.
 `deploy/deploy.sh [GIT_REF]` runs on the VM (GitHub Actions calls it over SSH after CI passes on
 `main`; you can also run it by hand). One deploy runs at a time (`flock`); a second one is refused.
 
+0. First start: `deploy.sh` is for a stack that already serves a trusted certificate. Start by hand
+   (`dc up -d --build`) while on ACME staging, switch to the production CA, `dc up -d caddy`, then use
+   `deploy.sh`. If the app answers only with certificate checks off, `deploy.sh` says "the app is up
+   but its TLS certificate is not trusted": before the switch it refuses and changes nothing, after
+   the switch it leaves the stack running and exits non-zero. It never stops db, redis or caddy.
 1. Checks: clean checkout, Docker Compose 2.24+, `deploy/.env.prod` with a `DOMAIN`.
 2. Fetches, then requires a fast-forward from the checked-out commit.
-3. Builds the images, then runs the migrations as a separate step. If either fails, the old version
+3. Builds the images (`build --pull`, which refreshes the base image only; refresh the pinned
+   third-party images monthly with `dc pull caddy db redis backup && dc up -d`), then runs the migrations as a separate step. If either fails, the old version
    keeps running and the checkout is restored.
 4. `up -d --wait`, then checks `https://$DOMAIN/health` (resolved to 127.0.0.1, so it works before
    public DNS) for up to 90 seconds.
+   Services with a single-file bind mount (`caddy` for `deploy/Caddyfile`, `backup` for
+   `deploy/backup.sh` and `deploy/restore.sh`, `duckdns` for `deploy/duckdns.sh` when enabled) are
+   force-recreated when that file changed, because git replaces the file with a new inode.
 5. Only after that passes it records the commit in `deploy/.last_good` and prunes dangling images.
 
 **Rollback.** If the new version fails after the switch, the script checks out `.last_good`, rebuilds
@@ -108,6 +117,13 @@ unhealthy too it prints `ROLLBACK FAILED, manual action needed` with the checked
 container states. On the very first deploy with no `.last_good`, the running stack counts as good if
 it is healthy before the switch; if it was not, only api, worker and beat are stopped.
 
+**Undoing a release.** After a successful deploy `.last_good` is the current commit, so neither
+`git checkout $(cat deploy/.last_good)` nor `deploy.sh <older sha>` ("already at a newer commit") undoes a
+bad release. Use `git revert <sha>` on `main` and push; CI redeploys. The `.last_good` recipe is only for
+recovering after `ROLLBACK FAILED`, and after ANY manual checkout also write that sha into
+`deploy/.last_good`. The automatic rollback restores only api, worker and beat: a failed deploy that
+changed the Caddy, backup or duckdns configuration keeps the new configuration (revert it on `main`).
+
 **Limits.** Migrations are forward-only in production: a rollback never downgrades the database, and
 the script warns when the failed commit added migrations. Write migrations additively (add columns
 and tables first, drop or rename only in a later release) so the previous version still runs on the
@@ -116,6 +132,11 @@ newer schema.
 **Logs.** The workflow runs the script detached from the SSH session, so a dropped connection or a
 cancelled job cannot stop it half-way. Its full output is in `deploy/last-deploy.log` on the VM (it
 never contains secret values) and is also printed in the Actions log.
+
+**Hardening (optional).** The deploy key is a full shell as `ubuntu`, which on Oracle images is effectively
+root (passwordless sudo, docker group). Keep the Actions secrets limited to trusted people and rotate the
+key if in doubt; restricting it with `restrict,command=` would need a wrapper for the workflow's single
+composite command and is not set up here.
 
 **DEPLOY_PATH.** Use an absolute path (for example `/home/ubuntu/home-awareness`). A leading `~/` is
 expanded on the VM, but an absolute path is the safe choice.
@@ -150,7 +171,9 @@ The firewall step is IPv4 only: if the VM ever gets IPv6, add the same three ACC
 ingress rules for TCP 80, TCP 443 and UDP 443 to the VCN security list or network security group.
 
 After it finishes it prints the remaining manual steps: log out and in (docker group), clone the
-repository, `python3 scripts/gen_secrets.py`, edit `deploy/.env.prod`, run `deploy/deploy.sh`.
+repository, `python3 scripts/gen_secrets.py`, edit `deploy/.env.prod`, start by hand with `dc up -d --build` while
+`ACME_CA` still points at Let's Encrypt staging, then remove that line, `dc up -d caddy`, and only then use
+`deploy/deploy.sh` (see `docs/deploy-oracle.md`, sections 6 and 7).
 
 ## DuckDNS (optional)
 
@@ -160,8 +183,8 @@ domain or a reserved IP do not run it.
 
 1. Create the subdomain and copy your token from duckdns.org; set `DOMAIN=yourname.duckdns.org` and
    `DUCKDNS_TOKEN=...` in `deploy/.env.prod`. (`DUCKDNS_SUBDOMAIN` overrides the name derived from
-   `DOMAIN`; without it, a `DOMAIN` that does not end in `.duckdns.org` makes the service exit with a
-   clear message.)
+   `DOMAIN`; without it, a `DOMAIN` that does not end in `.duckdns.org` makes the service log a
+   clear message and idle, so a deploy never fails because of it.)
 2. Enable the profile by adding the line `COMPOSE_PROFILES=duckdns` to `deploy/.env.prod`.
    `deploy/deploy.sh` passes that file with `--env-file`, and compose reads `COMPOSE_PROFILES` from
    it, so every deploy (including the GitHub Actions one, whose SSH session has no such variable)

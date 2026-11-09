@@ -6,6 +6,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -146,6 +147,9 @@ def test_caddyfile_redacts_secrets_and_keeps_headers_single():
     assert "REDACTED" in text
     assert "?X-Content-Type-Options" in text
     assert "{$ACME_CA:" in text
+    # device keys and the webhook secret travel in headers and show up in error logs on a 502
+    assert "request>headers>X-Device-Key delete" in text
+    assert "request>headers>X-Telegram-Bot-Api-Secret-Token delete" in text
 
 
 @needs_docker
@@ -318,3 +322,107 @@ def test_gen_secrets_refuses_to_overwrite_without_force(tmp_path):
     assert _gen(out, "--force").returncode == 0
     assert "JWT_SECRET=" in out.read_text()
     assert stat.S_IMODE(out.stat().st_mode) == 0o600
+
+
+HAND_EDITED = """# my notes
+DOMAIN=home.example.org
+ACME_EMAIL=me@example.org
+ACME_CA=https://acme-staging-v02.api.letsencrypt.org/directory
+EMAIL_BACKEND=smtp
+SMTP_HOST=smtp.example.org
+SMTP_USER=mailer
+SMTP_PASSWORD=smtp-pass
+SMTP_FROM=noreply@example.org
+TELEGRAM_BOT_TOKEN=123:abc
+TELEGRAM_WEBHOOK_SECRET=hook
+DUCKDNS_TOKEN=duck-token
+COMPOSE_PROFILES=duckdns
+MY_CUSTOM_KEY=custom value
+# COMMENTED_KEY=keep me
+POSTGRES_PASSWORD=pg-old
+JWT_SECRET=
+"""
+
+
+@pytest.mark.parametrize("flag", ["--force", "--rotate"])
+def test_gen_secrets_keeps_every_other_setting(tmp_path, flag):
+    out = tmp_path / ".env.prod"
+    out.write_text(HAND_EDITED)
+    r = _gen(out, flag)
+    assert r.returncode == 0, r.stderr
+    text = out.read_text()
+    for line in HAND_EDITED.splitlines():
+        key = line.partition("=")[0]
+        if line and key not in SECRETS:
+            assert line in text.splitlines(), line
+    values = _parse(out)
+    assert values["JWT_SECRET"] and values["SNAPSHOT_KEY"]  # empty/missing ones are generated
+    Fernet(values["SNAPSHOT_KEY"].encode())
+    if flag == "--force":
+        assert values["POSTGRES_PASSWORD"] == "pg-old"
+    else:
+        assert values["POSTGRES_PASSWORD"] != "pg-old"
+    assert "NTFY_BASE_URL" in values  # keys new in the template are added
+    assert stat.S_IMODE(out.stat().st_mode) == 0o600
+    for secret in (values["JWT_SECRET"], values["SNAPSHOT_KEY"], "smtp-pass", "duck-token"):
+        assert secret not in r.stdout + r.stderr
+
+
+def test_gen_secrets_force_twice_is_stable(tmp_path):
+    out = tmp_path / ".env.prod"
+    out.write_text(HAND_EDITED)
+    assert _gen(out, "--force").returncode == 0
+    first = out.read_text()
+    assert _gen(out, "--force").returncode == 0
+    assert out.read_text() == first
+
+
+def test_gen_secrets_help_says_rotate_keeps_settings():
+    r = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "gen_secrets.py"), "--help"],
+        capture_output=True, text=True, timeout=60,
+    )  # fmt: skip
+    out = " ".join(r.stdout.split()).lower()
+    assert "all other settings" in out
+
+
+@needs_docker
+def test_caddy_error_log_never_contains_device_key_or_webhook_secret(tmp_path):
+    """Real check in a throwaway container: a 502 (upstream down) logs the request headers."""
+    name = "ha-deploy-test-caddyfilter"
+    caddyfile = ROOT / "deploy" / "Caddyfile"
+    assert caddyfile.is_file()
+    subprocess.run(["docker", "rm", "-f", name], capture_output=True)  # only our own container
+    started = subprocess.run(
+        [
+            "docker", "run", "-d", "--rm", "--name", name, "-e", "DOMAIN=localhost",
+            "-e", "ACME_EMAIL=a@example.com",
+            "-v", f"{caddyfile}:/etc/caddy/Caddyfile:ro", "caddy:2-alpine",
+        ],
+        capture_output=True, text=True, timeout=120,
+    )  # fmt: skip
+    assert started.returncode == 0, started.stderr
+    try:
+        logs = ""
+        for _ in range(30):
+            time.sleep(1)
+            subprocess.run(
+                [
+                    "docker", "exec", name, "wget", "-q", "-O-", "--no-check-certificate",
+                    "--header", "X-Device-Key: ha_dev_SECRETKEY",
+                    "--header", "X-Telegram-Bot-Api-Secret-Token: HOOKSECRET",
+                    "--header", "Authorization: Bearer BEARERSECRET",
+                    "--header", "Cookie: sid=COOKIESECRET",
+                    "https://localhost/x?token=URLTOKEN",
+                ],
+                capture_output=True, text=True, timeout=30,
+            )  # fmt: skip
+            logs = subprocess.run(["docker", "logs", name], capture_output=True, text=True)
+            logs = logs.stdout + logs.stderr
+            if "502" in logs or "dial tcp" in logs:
+                break
+        assert "dial tcp" in logs or "502" in logs, "no error line was produced"
+        for secret in ("SECRETKEY", "HOOKSECRET", "BEARERSECRET", "COOKIESECRET", "URLTOKEN"):
+            assert secret not in logs, secret
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)

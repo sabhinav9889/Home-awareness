@@ -4,11 +4,16 @@
 	# Note: an explicit acme_ca drops Caddy's default ZeroSSL fallback issuer.
 	acme_ca {$ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
 
-	# Never log secrets that travel in URLs: WebSocket ?token=... and the Telegram webhook path.
+	# Never log secrets that travel in URLs (WebSocket ?token=..., the Telegram webhook path) or
+	# in headers that carry them (device key, Telegram webhook secret). Authorization and Cookie
+	# are redacted by Caddy itself. Error lines (for example a 502 while the api restarts) include
+	# the request headers, so these deletes matter. Other headers are logged as sent.
 	log default {
 		format filter {
 			wrap json
 			request>uri regexp "(token=)[^&]*|(/telegram/webhook/)[^/?]*" "${1}${2}REDACTED"
+			request>headers>X-Device-Key delete
+			request>headers>X-Telegram-Bot-Api-Secret-Token delete
 		}
 	}
 }

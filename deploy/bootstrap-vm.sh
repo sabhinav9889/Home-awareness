@@ -448,8 +448,14 @@ Remaining manual steps
   3. Clone the repository:   git clone <repo-url> ~/home-awareness && cd ~/home-awareness
   4. Create the secrets:     python3 scripts/gen_secrets.py     (writes deploy/.env.prod, mode 0600)
   5. Edit deploy/.env.prod: set DOMAIN and ACME_EMAIL (and DUCKDNS_TOKEN with
-     COMPOSE_PROFILES=duckdns if you use a free DuckDNS name).
-  6. First deploy:           deploy/deploy.sh
+     COMPOSE_PROFILES=duckdns if you use a free DuckDNS name). Keep the ACME_CA staging line
+     enabled for the first start (it avoids Let's Encrypt rate limits).
+  6. First start, by hand (deploy.sh refuses a certificate that is not trusted, which is what
+     staging gives you). From the repository, with dc = docker compose -f docker-compose.yml
+     -f docker-compose.prod.yml --env-file deploy/.env.prod -p home-awareness:
+       dc up -d --build
+     Then remove the ACME_CA line, run `dc up -d caddy`, and check https://<DOMAIN>/health.
+     From then on use deploy/deploy.sh (or the GitHub Actions auto-deploy).
   7. Optional: add a free UptimeRobot monitor for https://<DOMAIN>/health (see deploy/README.md).
 NEXT
 }

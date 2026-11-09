@@ -317,7 +317,9 @@ def test_restore_into_live_database_with_both_flags(env):
     load = [c for c in _calls(env).splitlines() if c.endswith("-f -")]
     assert len(load) == 1 and " -1 " in load[0] and "ON_ERROR_STOP=1" in load[0]
     sql = (Path(env["STUB_DIR"]) / "loaded.sql").read_text()
-    assert sql.startswith("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    assert sql.startswith(
+        "SET client_min_messages=warning; DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+    )
     assert "CREATE TABLE" in sql
     assert (
         "drop schema"
@@ -619,6 +621,8 @@ def test_backup_service_shape():
     assert svc["logging"]["driver"] == "json-file"
     assert svc["image"] == "postgres:16-alpine"
     assert svc["depends_on"]["db"]["condition"] == "service_healthy"
+    # the first backup runs at container start: the schema must exist by then
+    assert svc["depends_on"]["migrate"]["condition"] == "service_completed_successfully"
     assert "backups" in merged["volumes"]
     mounts = {v["target"]: v for v in svc["volumes"]}
     assert mounts["/backups"]["source"] == "backups"
@@ -649,3 +653,8 @@ def test_readme_documents_backups():
     assert "not backed up" in text.lower()
     for word in ("ON_ERROR_STOP", "force-recreate", "--since 48h", "non-pooled", "major version"):
         assert word in text, word
+
+
+def test_restore_silences_drop_cascade_notices():
+    text = RESTORE_SH.read_text() if "RESTORE_SH" in globals() else ""
+    assert "SET client_min_messages=warning;" in text

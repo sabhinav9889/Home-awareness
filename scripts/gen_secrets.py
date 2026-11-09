@@ -29,20 +29,39 @@ def generate() -> dict[str, str]:
     }
 
 
-def parse(text: str) -> dict[str, str]:
-    values = {}
-    for line in text.splitlines():
-        key, sep, value = line.partition("=")
-        if sep and not line.startswith("#"):
-            values[key] = value
-    return values
-
-
 def render(template: str, values: dict[str, str]) -> str:
     lines = []
     for line in template.splitlines():
         key, sep, _ = line.partition("=")
         lines.append(f"{key}={values[key]}" if sep and key in values else line)
+    return "\n".join(lines) + "\n"
+
+
+def merge(existing: str, template: str, fresh: dict[str, str], rotate: bool) -> str:
+    """Keep the existing file as it is; change only what must change.
+
+    Every existing line (settings, unknown keys, comments) is kept verbatim. Only the three
+    secrets are replaced, when empty/missing (--force) or always (--rotate). Keys that are new
+    in the template are appended.
+    """
+    lines = []
+    seen: set[str] = set()
+    for line in existing.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and not line.startswith("#") and key in SECRET_KEYS:
+            seen.add(key)
+            if rotate or not value.strip():
+                line = f"{key}={fresh[key]}"
+        elif sep and not line.startswith("#"):
+            seen.add(key)
+        lines.append(line)
+    added = []
+    for line in template.splitlines():
+        key, sep, _ = line.partition("=")
+        if sep and not line.startswith("#") and key not in seen:
+            added.append(f"{key}={fresh[key]}" if key in SECRET_KEYS else line)
+    if added:
+        lines += ["", "# Added by scripts/gen_secrets.py (new in the template):", *added]
     return "\n".join(lines) + "\n"
 
 
@@ -67,13 +86,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="rewrite an existing file from the template but KEEP its existing "
-        "POSTGRES_PASSWORD, JWT_SECRET and SNAPSHOT_KEY (only missing/empty ones are generated)",
+        help="refresh an existing file: KEEP every existing setting and secret line, generate "
+        "only POSTGRES_PASSWORD, JWT_SECRET and SNAPSHOT_KEY when missing/empty, and add keys "
+        "that are new in the template",
     )
     parser.add_argument(
         "--rotate",
         action="store_true",
-        help="regenerate ALL secrets in an existing file. WARNING: the existing database volume "
+        help="regenerate the three secrets (POSTGRES_PASSWORD, JWT_SECRET, SNAPSHOT_KEY) in an "
+        "existing file and keep all other settings. WARNING: the existing database volume "
         "keeps the old POSTGRES_PASSWORD so the api cannot connect until it is changed there; "
         "stored snapshots (old SNAPSHOT_KEY) become unreadable; changing JWT_SECRET gets "
         "everyone logged out",
@@ -92,10 +113,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     values = generate()
-    if exists and not args.rotate:
-        old = parse(out.read_text())
-        values.update({k: old[k] for k in SECRET_KEYS if old.get(k)})
-    write_atomic(out, render(EXAMPLE.read_text(), values))
+    if exists:
+        content = merge(out.read_text(), EXAMPLE.read_text(), values, rotate=args.rotate)
+    else:
+        content = render(EXAMPLE.read_text(), values)
+    write_atomic(out, content)
     print(out)
     return 0
 

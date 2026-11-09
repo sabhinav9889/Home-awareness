@@ -200,8 +200,11 @@ python3 scripts/gen_secrets.py
 ```
 
 You should see: `deploy/.env.prod` (its full path). It refuses to overwrite an existing file
-unless you pass `--force` (keeps existing secrets) or `--rotate` (replaces all; read its
-`--help` first, rotating breaks the database password, stored snapshots and logins).
+unless you pass `--force` or `--rotate`. `--force` keeps every line you already have (DOMAIN,
+ACME_*, email, Telegram, DuckDNS, `COMPOSE_PROFILES`, your own keys), fills only secrets that are
+empty or missing, and adds keys that are new in the template. `--rotate` replaces only the three
+secrets (`POSTGRES_PASSWORD`, `JWT_SECRET`, `SNAPSHOT_KEY`) and keeps all other settings; read its
+`--help` first, rotating breaks the database password, stored snapshots and logins.
 
 **Back up the secrets now.** Show the file in your terminal, copy `POSTGRES_PASSWORD`,
 `JWT_SECRET` and `SNAPSHOT_KEY` into a password manager, then clear the screen:
@@ -260,7 +263,8 @@ dc logs -f caddy
 ```
 
 You should see: `dc ps` lists `db`, `redis`, `api`, `worker`, `beat`, `caddy`, `backup`
-(and `duckdns` if enabled) as running or healthy; `migrate` has exited with code 0. In the
+(and `duckdns` if enabled) as running or healthy. Use `dc ps -a` to also see `migrate`, which has
+exited with code 0 (plain `dc ps` hides exited containers). In the
 Caddy log, a line mentioning the certificate being obtained from `acme-staging-v02`. Stop
 following with Ctrl+C.
 
@@ -286,9 +290,12 @@ dc logs --since 5m caddy
 You should see: a certificate obtained from Let's Encrypt production; no browser warning on
 `https://NAME.duckdns.org/app/`.
 
-Do not run `deploy/deploy.sh` while staging is active: its health check verifies the certificate
-and would treat the untrusted staging one as a failure. (If you need to, `CURL_EXTRA=-k`
-is the documented override.)
+Do not use `deploy/deploy.sh` while staging is active. Its health check verifies the certificate;
+if the app answers only with `-k` it prints "the app is up but its TLS certificate is not
+trusted", refuses to deploy before the switch, and after a switch it leaves the stack running and
+exits non-zero (it never stops db, redis or caddy). The sequence is therefore: first start by hand
+(`dc up -d --build`) on staging, switch to the production CA, `dc up -d caddy`, and only then use
+`deploy.sh` or the auto-deploy. (`CURL_EXTRA=-k` is the documented override for a one-off.)
 
 ## 8. Email
 
@@ -374,11 +381,18 @@ Actions, New repository secret:
 
 | Secret | Value |
 | --- | --- |
-| `DEPLOY_HOST` | the VM's IP or hostname (only letters, digits, `.`, `_`, `-`) |
+| `DEPLOY_HOST` | the VM's IP, the SAME address you gave `ssh-keyscan` in 10b (use the IP in both places; only letters, digits, `.`, `_`, `-`) |
 | `DEPLOY_USER` | `ubuntu` |
 | `DEPLOY_SSH_KEY` | the whole contents of `~/.ssh/ha_deploy` (the private key, including the BEGIN and END lines) |
 | `DEPLOY_HOST_KEY` | the `ssh-keyscan` line from 10b, exactly |
 | `DEPLOY_PATH` | `/home/ubuntu/home-awareness` (an absolute path; a leading `~/` also works but absolute is safer) |
+
+**Hardening (optional).** The deploy key is a full shell as `ubuntu`, which on Oracle images is
+effectively root (passwordless sudo, member of the docker group). Anyone who gets the GitHub
+secret `DEPLOY_SSH_KEY` controls the VM. Keep the repository's Actions secrets limited to people
+you trust, use the key for nothing else, and rotate it if in doubt. Restricting it with
+`restrict,command=` in `authorized_keys` is possible but the workflow sends one composite
+command, so it needs a wrapper script; that is deliberately not set up here.
 
 **10d. Make the VM a clean deploy target.** `deploy.sh` refuses a checkout with local changes to
 tracked files, and it needs a fast-forward from the checked-out commit. Do not edit tracked
@@ -473,7 +487,9 @@ Use `dc` from section 7 (retype the function after each login).
 | --- | --- |
 | Update to the newest `main` | `cd ~/home-awareness && deploy/deploy.sh` |
 | Deploy one commit | `deploy/deploy.sh <40-hex sha>` |
-| Roll back by hand | `git checkout --detach $(cat deploy/.last_good)`, then `dc build api worker beat`, then `dc up -d --no-deps --wait api worker beat` (the same steps the script's rollback uses; the database stays as it is) |
+| Undo a bad release that deployed fine | `git revert <sha>` on `main` and push; CI then redeploys the reverted code. (After a successful deploy `.last_good` IS the current commit, and `deploy.sh <older sha>` answers "already at a newer commit", so neither can undo it.) |
+| Recover after `ROLLBACK FAILED` | `git checkout --detach $(cat deploy/.last_good)`, then `dc build api worker beat`, then `dc up -d --no-deps --wait api worker beat` (the script's own rollback steps; the database stays as it is). After ANY manual checkout also write that sha into `deploy/.last_good` (`git rev-parse HEAD > deploy/.last_good`), otherwise the next failed deploy "rolls back" to a commit you left. |
+| Refresh third-party images | Monthly: `dc pull caddy db redis backup`, then `dc up -d`. (`deploy.sh` builds with `--pull`, which refreshes the app's base image only.) |
 | Logs | `dc logs --since 1h api` (also `worker`, `beat`, `caddy`, `backup`, `duckdns`) |
 | Restart one service | `dc restart api` |
 | Status | `dc ps` |
@@ -483,9 +499,15 @@ Use `dc` from section 7 (retype the function after each login).
 Certificate renewal is automatic: Caddy renews well before expiry, and the certificate data
 lives in the `caddy_data` volume. Keep ports 80 and 443 open.
 
-After a deploy that changes `deploy/backup.sh`, `deploy/restore.sh` or `deploy/duckdns.sh`,
-recreate that service (`dc up -d --force-recreate backup`, or `duckdns`) because single-file
-bind mounts keep the old file.
+Single-file bind mounts keep the old file inside a running container when git replaces it, so
+`deploy.sh` does this for you: when a deploy changes `deploy/Caddyfile` it recreates `caddy`; for
+`deploy/backup.sh` or `deploy/restore.sh` it recreates `backup`; for `deploy/duckdns.sh` it
+recreates `duckdns` (only if that profile is enabled). By hand it is
+`dc up -d --force-recreate --no-deps caddy` (or `backup`, `duckdns`).
+
+**Limits of the automatic rollback.** It restores and restarts only `api`, `worker` and `beat`. A
+failed deploy that changed the Caddy, backup or duckdns configuration keeps the new
+configuration; fix it by reverting on `main`.
 
 What `deploy.sh` messages mean:
 
@@ -501,6 +523,7 @@ What `deploy.sh` messages mean:
 | `new version ... failed its start or health check` | Followed by a rollback. |
 | `ROLLED BACK to <sha>` | The old version serves again; the deploy still counts as failed. |
 | `ROLLBACK FAILED, manual action needed` | Both versions unhealthy; run `dc ps` and `dc logs --since 15m api`, then fix or run the manual rollback. |
+| `the app is up but its TLS certificate is not trusted` | The site answers but the certificate is not trusted (ACME staging, or still being issued). Before the switch nothing was changed; after it the stack keeps running. Switch `ACME_CA` to production (section 7) or wait, then re-run. |
 | `FIRST DEPLOY FAILED` | No earlier good version; api, worker and beat were stopped. Fix and re-run. |
 | `WARNING: migrations in ... are not in ...` | The failed commit added migrations; the database was not downgraded. |
 
@@ -536,7 +559,7 @@ its disk is temporary, so camera photos are lost on every restart. Everything el
 | TLS with Caddy's internal CA on `localhost` | Oracle's security list and the VM's real firewall |
 | A WebSocket works through the proxy | Real Let's Encrypt issuance (staging and production) |
 | A forged `X-Forwarded-For` cannot dodge rate limits | DuckDNS with a real name and token |
-| Secrets (`token=`, the Telegram webhook path) are redacted from Caddy logs | A real deploy over SSH from GitHub Actions |
+| Caddy logs redact URL tokens (`token=`), the Telegram webhook path and the `Authorization`, `Cookie`, `X-Device-Key` and `X-Telegram-Bot-Api-Secret-Token` headers (other headers are logged as sent; checked in a throwaway container, including the 502 error line) | A real deploy over SSH from GitHub Actions |
 | Backup and restore round trip against a real Postgres | `setsid -w` and `up -d --no-deps --wait` on the VM's own Docker |
 | `deploy.sh` rollback logic, against stubs and throwaway git repos | Real email through an SMTP service |
 | `bootstrap-vm.sh` against stubs and a fake `/etc` | UptimeRobot |
@@ -555,5 +578,5 @@ sudo iptables -L INPUT -n --line-numbers
 ```
 
 and the exact error text from the Actions log or `deploy/bootstrap-vm.sh`. Caddy redacts
-`token=` in its own log, but `dc logs api | grep token=` output is a live confirmation or
+`token=` and the headers listed above in its own log, but `dc logs api | grep token=` output is a live confirmation or
 reset link: do not paste it.

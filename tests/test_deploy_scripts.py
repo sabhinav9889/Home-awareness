@@ -25,6 +25,11 @@ echo "docker $* @$head" >> "$STUB_DIR/calls.log"
 if [[ " $* " == *" version "* ]]; then
   cat "$STUB_DIR/compose_version" 2>/dev/null || echo "v2.30.0"
 fi
+if [[ " $* " == *" config --services "* ]]; then
+  cat "$STUB_DIR/services" 2>/dev/null ||
+    printf '%s\n' caddy db redis migrate api worker beat backup
+  exit 0
+fi
 if [ -f "$STUB_DIR/slow" ] && [[ " $* " == *" build "* ]]; then sleep 2; fi
 if [ -f "$STUB_DIR/docker_fail" ]; then
   while read -r sha pat; do
@@ -42,6 +47,10 @@ exit 0
 CURL_STUB = r"""#!/usr/bin/env bash
 echo "curl $*" >> "$STUB_DIR/calls.log"
 full=$(git rev-parse HEAD 2>/dev/null || echo none)
+if [ -f "$STUB_DIR/tls_untrusted" ] && [[ " $* " != *" -k "* ]]; then
+  echo "curl: (60) SSL certificate problem: unable to get local issuer certificate" >&2
+  exit 60
+fi
 if [ -f "$STUB_DIR/unhealthy" ]; then
   while read -r sha; do
     [ -z "$sha" ] && continue
@@ -649,3 +658,129 @@ def test_workflow_detaches_the_remote_run_from_the_ssh_session() -> None:
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")
 def test_shellcheck_clean() -> None:
     subprocess.run(["shellcheck", str(DEPLOY_SH)], check=True)
+
+
+# --- final fix wave ---------------------------------------------------------------------
+
+
+def recreates(sb: Sandbox) -> list[str]:
+    return [c for c in sb.calls() if "--force-recreate" in c]
+
+
+def test_build_pulls_base_images_but_rollback_build_does_not(sb: Sandbox) -> None:
+    sb.last_good.write_text(sb.base + "\n")
+    new = sb.push({"app.txt": "v2\n"}, "v2")
+    sb.set_file("unhealthy", new + "\n")
+    sb.run(new)
+    builds = [c for c in sb.calls() if " build" in c]
+    assert "build --pull" in builds[0]
+    assert "--pull" not in builds[1] and "api worker beat" in builds[1]
+
+
+def test_caddyfile_change_recreates_only_caddy(sb: Sandbox) -> None:
+    sb.last_good.write_text(sb.base + "\n")
+    new = sb.push({"deploy/Caddyfile": "# v2\n"}, "caddy change")
+    r = sb.run(new)
+    assert r.returncode == 0, out(r)
+    rec = recreates(sb)
+    assert len(rec) == 1 and rec[0].split("@")[0].strip().endswith(
+        "--force-recreate --no-deps caddy"
+    )
+    calls = sb.calls()
+    assert index(calls, " up -d --wait") < index(calls, "--force-recreate")
+    assert index(calls, "--force-recreate") < index(calls, "curl")
+
+
+@pytest.mark.parametrize("name", ["deploy/backup.sh", "deploy/restore.sh"])
+def test_backup_script_change_recreates_backup(sb: Sandbox, name: str) -> None:
+    sb.last_good.write_text(sb.base + "\n")
+    new = sb.push({name: "# v2\n"}, "script change")
+    assert sb.run(new).returncode == 0
+    rec = recreates(sb)
+    assert len(rec) == 1 and rec[0].split("@")[0].strip().endswith(
+        "--force-recreate --no-deps backup"
+    )
+
+
+def test_duckdns_script_change_recreates_duckdns_only_when_enabled(sb: Sandbox) -> None:
+    sb.last_good.write_text(sb.base + "\n")
+    new = sb.push({"deploy/duckdns.sh": "# v2\n"}, "duckdns change")
+    assert sb.run(new).returncode == 0
+    assert recreates(sb) == [], "the duckdns profile is not enabled: nothing to recreate"
+    sb.set_file("calls.log", "")
+    sb.last_good.write_text(new + "\n")
+    newer = sb.push({"deploy/duckdns.sh": "# v3\n"}, "duckdns change 2")
+    sb.set_file("services", "caddy\ndb\nredis\nmigrate\napi\nworker\nbeat\nbackup\nduckdns\n")
+    assert sb.run(newer).returncode == 0
+    rec = recreates(sb)
+    assert len(rec) == 1 and rec[0].split("@")[0].strip().endswith(
+        "--force-recreate --no-deps duckdns"
+    )
+
+
+def test_several_mounted_files_changed_recreate_each_service_once(sb: Sandbox) -> None:
+    sb.last_good.write_text(sb.base + "\n")
+    new = sb.push(
+        {"deploy/Caddyfile": "# v2\n", "deploy/backup.sh": "#\n", "deploy/restore.sh": "#\n"},
+        "many",
+    )
+    assert sb.run(new).returncode == 0
+    rec = recreates(sb)
+    assert len(rec) == 1
+    assert rec[0].split("@")[0].strip().endswith("--force-recreate --no-deps caddy backup")
+
+
+def test_unrelated_change_recreates_nothing(sb: Sandbox) -> None:
+    sb.last_good.write_text(sb.base + "\n")
+    new = sb.push({"app.txt": "v2\n"}, "unrelated")
+    assert sb.run(new).returncode == 0
+    assert recreates(sb) == []
+
+
+def test_first_deploy_on_a_fresh_stack_recreates_nothing_special(sb: Sandbox) -> None:
+    assert not sb.last_good.exists()
+    new = sb.push({"deploy/Caddyfile": "# v2\n"}, "caddy change")
+    sb.set_file("unhealthy", sb.base + "\n")  # nothing is running before the first deploy
+    r = sb.run(new)
+    assert r.returncode == 0, out(r)
+    assert recreates(sb) == []
+
+
+def test_untrusted_certificate_before_the_switch_refuses_and_changes_nothing(sb: Sandbox) -> None:
+    new = sb.push({"app.txt": "v2\n"}, "v2")
+    sb.set_file("tls_untrusted", "")
+    r = sb.run(new)
+    assert r.returncode != 0
+    assert "not trusted" in out(r) and "staging" in out(r).lower()
+    assert sb.head() == sb.base
+    assert not any(" build" in c or " up " in c or " stop" in c for c in sb.calls())
+    probe = [c for c in sb.calls() if c.startswith("curl") and " -k" in c]
+    assert probe and "--resolve deploy.example.test:443:127.0.0.1" in probe[0]
+
+
+def test_untrusted_certificate_after_the_switch_keeps_the_stack_running(sb: Sandbox) -> None:
+    sb.last_good.write_text(sb.base + "\n")
+    new = sb.push({"app.txt": "v2\n"}, "v2")
+    sb.set_file("tls_untrusted", "")
+    r = sb.run(new)
+    assert r.returncode != 0
+    assert "not trusted" in out(r)
+    calls = sb.calls()
+    assert not any(" stop" in c or " down" in c for c in calls)
+    assert "ROLLED BACK" not in out(r) and "ROLLBACK FAILED" not in out(r)
+    assert len([c for c in calls if " up -d" in c]) == 1
+    assert sb.last_good.read_text().strip() == sb.base, ".last_good only follows a trusted deploy"
+
+
+def test_untrusted_certificate_on_a_first_deploy_never_stops_anything(sb: Sandbox) -> None:
+    new = sb.push({"app.txt": "v2\n"}, "v2")
+    sb.set_file("tls_untrusted", "")
+    sb.run(new)
+    assert not any(" stop" in c or " down" in c for c in sb.calls())
+
+
+def test_plain_failure_is_not_mistaken_for_a_tls_problem(sb: Sandbox) -> None:
+    sb.last_good.write_text(sb.base + "\n")
+    new = sb.push({"app.txt": "v2\n"}, "v2")
+    sb.set_file("unhealthy", new + "\n")
+    assert "not trusted" not in out(sb.run(new))
