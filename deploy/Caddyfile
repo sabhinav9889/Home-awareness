@@ -1,0 +1,24 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	# No explicit `tls` line: for DOMAIN=localhost (local smoke tests) Caddy automatically uses its
+	# internal CA (`tls internal`) and never contacts Let's Encrypt; real domains get ACME certs.
+
+	request_body {
+		max_size 9MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	# The api trusts X-Forwarded-For from any peer, so Caddy must never pass a client-supplied
+	# value on: always replace it with the address Caddy actually saw.
+	reverse_proxy api:8000 {
+		header_up X-Forwarded-For {remote_host}
+	}
+}

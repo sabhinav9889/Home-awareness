@@ -1,0 +1,72 @@
+# Production overlay. Use:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     --env-file deploy/.env.prod -p home-awareness up -d
+# Only Caddy publishes host ports (80/443). Every required variable fails early, by name.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-db-url: &db-url
+  DATABASE_URL: postgresql+asyncpg://home:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env.prod}@db:5432/home
+
+x-prod-env: &prod-env
+  <<: *db-url
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN:?set DOMAIN in deploy/.env.prod}}
+  SNAPSHOT_KEY: ${SNAPSHOT_KEY:?set SNAPSHOT_KEY in deploy/.env.prod}
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env.prod}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in deploy/.env.prod}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api: {condition: service_healthy}
+    logging: *logging
+  db:
+    restart: unless-stopped
+    ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env.prod}
+    # No initdb scripts in production (the dev one only creates home_test).
+    volumes: !override
+      - pgdata:/var/lib/postgresql/data
+    logging: *logging
+  redis:
+    restart: unless-stopped
+    ports: !reset []
+    logging: *logging
+  migrate:
+    environment: *prod-env
+    logging: *logging
+  api:
+    restart: unless-stopped
+    ports: !reset []
+    environment:
+      <<: *prod-env
+      # Caddy is the only peer that can reach the api (no host port, internal network), and it
+      # overwrites X-Forwarded-For with the real client address, so trusting every peer is safe.
+      FORWARDED_ALLOW_IPS: "*"
+    logging: *logging
+  worker:
+    environment: *prod-env
+    logging: *logging
+  beat:
+    environment: *prod-env
+    logging: *logging
+
+volumes:
+  caddy_data:
+  caddy_config:
