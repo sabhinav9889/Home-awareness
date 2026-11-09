@@ -1,0 +1,81 @@
+name: deploy
+# Auto-deploys the commit that CI verified on main. Does nothing (green, with a notice) until the
+# DEPLOY_* secrets are set. See deploy/README.md.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time; a running deploy is never cancelled halfway.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.head_branch == 'main'
+        && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check deploy is configured
+        id: guard
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::notice::DEPLOY_HOST is not set; skipping the deploy (this is expected until the VM is set up)."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy over SSH
+        if: steps.guard.outputs.run == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+          # The commit CI verified (workflow_run), or the manually dispatched main commit.
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          for name in DEPLOY_USER DEPLOY_PATH DEPLOY_SSH_KEY DEPLOY_HOST_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::secret $name is not set"
+              exit 1
+            fi
+          done
+          if ! [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::refusing to deploy: not a 40-hex commit sha"
+            exit 1
+          fi
+          if ! [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ && "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+            echo "::error::DEPLOY_HOST or DEPLOY_USER has unexpected characters"
+            exit 1
+          fi
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+          umask 077
+          key="$workdir/id"
+          known="$workdir/known_hosts"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          printf '%s\n' "$DEPLOY_HOST_KEY" > "$known"
+          remote="cd $(printf '%q' "$DEPLOY_PATH") && ./deploy/deploy.sh $DEPLOY_SHA"
+          ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=20 -o ServerAliveInterval=30 \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$remote"
+          rm -f "$key" "$known"
