@@ -1,12 +1,27 @@
 # Home Awareness
 
-Sensors around a home listen locally for sounds a household cares about (a scream, breaking glass, a smoke alarm) and report short events to this server, which alerts each household member the way they chose: live in the browser, Telegram, or ntfy. Sensors send only the sound type, a confidence and a time; raw audio never reaches the server.
+Sensors around a home listen and watch locally for things a household cares about (a scream, breaking glass, a smoke alarm, a doorbell, a fall, a person in the house while it is guarded) and report short events to this server, which alerts each household member the way they chose: live in the browser, on the laptop with an alarm through the headphones, Telegram, or ntfy. Sound sensors send only the sound type, a confidence and a time; raw audio never reaches the server. Camera sensors analyse video on the device and send one small snapshot only when they raise an alert.
 
 > Home-awareness tool. Not a medical device, security alarm, or emergency service. Cameras send a single snapshot only when they raise an alert.
 
 ![Architecture](docs/architecture.png)
 
-This repository is the **FastAPI server core** (Plan 1): sign-up and households, invites, pairing and device keys, heartbeats, events, the rule engine (repeat counts, cooldowns, merging), alert delivery with retries, a live WebSocket feed, offline-sensor warnings, and Telegram linking. The laptop sensor and alert agent live in [`edge/`](edge/README.md) (Plan 2). The browser dashboard is served by the same app (see [Dashboard](#dashboard)). Design: [docs/design.md](docs/design.md). Competitor research: [docs/research/2026-11-07-competitors.md](docs/research/2026-11-07-competitors.md).
+## What is in this repository
+
+| Part | Where | What it is |
+| --- | --- | --- |
+| Server | `app/` | FastAPI + Postgres + Redis + Celery: households and members, pairing and device keys, the rule engine (repeat counts, cooldowns, merging across sensors), alert delivery with retries, a live WebSocket feed, offline-sensor warnings, Telegram and ntfy, rooms, Away mode, combined incidents, encrypted camera snapshots. |
+| Dashboard | `app/web/static/` | Plain HTML/CSS/JavaScript, served by the API at `/app/` (see [Dashboard](#dashboard)). |
+| Sensors and agent | [`edge/`](edge/README.md) | `ha-sensor` (laptop microphone, YAMNet on device), `ha-camera` (webcam, MediaPipe pose and object models on device), `ha-agent` (desktop popups and a headphone alarm). |
+| Deployment | `docker-compose.prod.yml`, [`deploy/`](deploy/README.md) | Caddy HTTPS, deploy script with rollback, nightly backups with a tested restore, VM bootstrap, GitHub Actions auto-deploy. Guide: [docs/deploy-oracle.md](docs/deploy-oracle.md). |
+| Design and notes | [`docs/`](docs/design.md) | Design, per-sound accuracy ([docs/accuracy.md](docs/accuracy.md)), competitor research ([docs/research/2026-11-07-competitors.md](docs/research/2026-11-07-competitors.md)), plans, interview notes. |
+
+## Status
+
+- **Working and tested:** sound detection and alerts (doorbell, dog barking, glass, smoke alarm and more); households, rooms and members; the live dashboard; Telegram and ntfy; the camera client (run live on a laptop webcam: it detects people and sends events with snapshots; it only reports a person while the house is guarding); combined incidents across sensors in a room; production deployment on an Oracle Always Free VM with HTTPS, backups and a rollback-capable deploy script.
+- **Experimental (treat alerts as hints):** scream (unmeasured), fall and lying-still (tested only on synthetic body positions; a laptop webcam sees too little of a person), and weapon detection, which is off by default because everyday objects trigger it.
+- **Not built yet:** using an Android phone's microphone and camera as a sensor (needs the HTTPS the deployment now provides), and a "real / false alarm" button on alerts to measure and tune accuracy.
+- **Tests:** about 1,000 (`613` server and `429` sensor-client test functions), including real-browser dashboard tests and a real-Postgres backup and restore drill. CI runs them on every push.
 
 ## Quick start
 
@@ -23,7 +38,7 @@ Configuration is environment variables only (see `.env.example` and `app/config.
 
 ## Deploy it
 
-To run the whole system on a free Oracle Cloud VM (HTTPS, nightly backups, optional auto-deploy), follow the step-by-step guide [docs/deploy-oracle.md](docs/deploy-oracle.md). Reference for the scripts: [deploy/README.md](deploy/README.md).
+The whole system runs on a free Oracle Cloud Always Free VM (an Arm machine) behind Caddy with automatic HTTPS and a free DuckDNS name, with nightly backups and an optional GitHub Actions auto-deploy that rolls back a failed release. The step-by-step guide, written from doing exactly that, is [docs/deploy-oracle.md](docs/deploy-oracle.md); a script that keeps retrying until Oracle has free Arm capacity is [deploy/oracle-launch-retry.sh](deploy/oracle-launch-retry.sh). Reference for the scripts: [deploy/README.md](deploy/README.md). The no-card fallback (Render, Neon, Upstash) is described in the guide but was not tested.
 
 ## Upgrading to 1b
 
@@ -40,12 +55,13 @@ A plain HTML/CSS/JavaScript app (no framework, no bundler, no CDN scripts) serve
 
 | Page | What it does |
 | --- | --- |
-| Overview | Live status of the household: sensors online, offline or waiting to pair, today's counts, a live event table and which alert channels are on. |
+| Overview | Live status of the household: sensors online, offline or waiting to pair, today's counts, a live event table (with the room and, for camera events, the photo), the Away button and which alert channels are on. |
 | Sounds & rules | Switch each sound on or off, and set its minimum confidence, repeat count, window and cooldown. |
-| Sensors | Create an 8-character pairing code for a new sensor (with a countdown), see each sensor's state, and remove sensors. |
+| Sensors | Create an 8-character pairing code for a new sensor or camera (pick its room; a camera needs the consent tick), see each sensor's state, room and badge (Microphone or Camera), the per-camera "Send snapshots" switch, and remove sensors. |
+| Rooms | Create rooms (common area, entrance, bedroom, bathroom, outdoor, other) and assign sensors to them. Sensors in the same room can combine into incidents. |
 | Alert channels | Popup and alarm sound in the browser, Telegram link, ntfy topic, browser notifications, a test alert, and laptop agent tokens. |
-| Household | Members and invite links, the household time zone, removing members, and leaving or deleting the household. |
-| Alert screen | A full-screen, dark, assertive alert on every page when a sound alerts you: "I'm on it", event details, dismiss. |
+| Household | Members and invite links, the household time zone, night hours and photo retention (owner), removing members, and leaving or deleting the household. |
+| Alert screen | A full-screen, dark, assertive alert on every page when something alerts you: the room and sensor, the camera photo if there is one, "I'm on it", dismiss. |
 
 | View | Phone (390 px) | Laptop (1280 px) |
 | --- | --- | --- |
@@ -58,7 +74,7 @@ A plain HTML/CSS/JavaScript app (no framework, no bundler, no CDN scripts) serve
 | Log in | ![Log in, phone](docs/screenshots/login-mobile.png) | ![Log in, laptop](docs/screenshots/login-desktop.png) |
 | Sign up | ![Sign up, phone](docs/screenshots/signup-mobile.png) | ![Sign up, laptop](docs/screenshots/signup-desktop.png) |
 
-The screenshots show a made-up demo household. Regenerate them with `uv run python scripts/dashboard_screenshots.py` (needs Postgres and Google Chrome; it uses the `home_test` database like the tests and empties it afterwards).
+The screenshots show a made-up demo household and predate the Rooms and camera screens. Regenerate them with `uv run python scripts/dashboard_screenshots.py` (needs Postgres and Google Chrome; it uses the `home_test` database like the tests and empties it afterwards).
 
 ## Laptop sensor and alert agent
 
@@ -67,6 +83,10 @@ The screenshots show a made-up demo household. Regenerate them with `uv run pyth
 ## Camera sensor
 
 `ha-camera` (in [`edge/`](edge/README.md#camera-sensor-ha-camera)) turns a Linux laptop webcam or USB camera into a sensor for falls, lying still and a person while the house is Away or at night. Video is analysed on the device and never leaves it. Cameras send a single snapshot only when they raise an alert, if the camera's "Send snapshots" switch is on (see [Camera snapshots](#camera-snapshots-optional)). Usage and honest limits: [edge/README.md](edge/README.md#camera-sensor-ha-camera); a morning test checklist: [docs/camera-live-test.md](docs/camera-live-test.md); try camera alerts without a camera with `scripts/fake_camera.py`; design: [camera spec](docs/superpowers/specs/2026-11-08-camera-sensors-design.md).
+
+## Rooms, Away mode and incidents
+
+Every sensor can belong to a room. Away mode (any member can switch it on the Overview page) plus optional night hours (set by the owner, in the household's time zone) make the house "guarding": only then do cameras report a person. Within one room, related events combine into a follow-up incident that never delays the individual alerts: **Possible break-in** (glass breaking plus a person within 15 s), **Fall confirmed** (a camera fall plus a thud or scream within 10 s) and **Possible property damage**. Photos are shown only to household members; see [Camera snapshots](#camera-snapshots-optional).
 
 ## Telegram bot (optional)
 
@@ -112,7 +132,7 @@ uv sync
 uv run pytest -q && uv run ruff check .
 ```
 
-The dashboard tests (`tests/web`, marked `web`) drive Google Chrome through Playwright and skip cleanly when Chrome is not installed.
+The dashboard tests (`tests/web`, marked `web`) drive Google Chrome through Playwright and skip cleanly when Chrome is not installed. The sensor client has its own tests: `cd edge && uv run pytest -q` (add `--extra camera` and run `ha-camera fetch-model` to include the camera and real-model tests).
 
 `TEST_DATABASE_URL` must name a database ending in `_test`; the suite drops and recreates its tables and refuses to run otherwise.
 
@@ -125,7 +145,7 @@ The dashboard tests (`tests/web`, marked `web`) drive Google Chrome through Play
 ## Observability
 
 - `GET /health` checks Postgres and Redis.
-- `GET /metrics` serves Prometheus counters: `ha_events_received_total{sound}`, `ha_events_merged_total`, `ha_alerts_created_total{sound}`, `ha_deliveries_total{channel,status}`, `ha_devices_offline_total`. Do not expose `/metrics` publicly; restrict it at your reverse proxy.
+- `GET /metrics` serves Prometheus counters: `ha_events_received_total{sound}`, `ha_events_merged_total`, `ha_alerts_created_total{sound}`, `ha_deliveries_total{channel,status}`, `ha_devices_offline_total`. Do not expose `/metrics` publicly: the production Caddyfile answers 404 for it.
 - **Limitation:** each process has its own metrics registry. With Celery, delivery and offline-check counters (`ha_deliveries_total`, `ha_devices_offline_total`) are incremented in the worker/beat processes, so the API's `/metrics` does not show them. The event and alert counters are incremented in the API and are visible. Aggregating across processes is out of scope for now.
 - Each request logs one JSON line (`method`, `path`, `status`, `duration_ms`, `request_id`). `path` is the matched route template (for example `/telegram/webhook/{secret}`), never the raw URL, so tokens in paths and query strings (`/ws?token=...`) stay out of logs. No headers or bodies are logged. The Docker image runs uvicorn with `--no-access-log` for the same reason, the app sets uvicorn's own `uvicorn.error` logger to `WARNING` (at `INFO` it logs every WebSocket path including `?token=`), and every log line in every process has `token=<value>` masked to `token=***` as a backstop. The console email backend prints straight to stderr, outside logging, so its links stay usable in development. The `request_id` is also returned as the `X-Request-ID` response header.
 

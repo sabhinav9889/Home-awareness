@@ -13,7 +13,7 @@ Everything here is true of the code in this repo. If you can't explain a line be
 - **Measured** detection on 2,000 ESC-50 clips and used live testing to tune label rules — cut glass-breaking false alarms from 6 to 2 (precision 0.85 → 0.94).
 
 - Extended it with **camera sensors**: on-device pose and object detection (MediaPipe) raises falls, "lying still", and "person while the house is guarding" alerts; **video never leaves the device** — only one small JPEG per alert, **Fernet-encrypted at rest**, retention-limited (1/7/30 days) and visible only to household members. A Redis-backed **correlation step** combines sensors in the same room into follow-up incidents ("possible break-in" = glass + person within 15 s).
-- Wrote the **production deployment tooling** for a $0 Oracle Always Free VM: Docker Compose + Caddy automatic HTTPS, a deploy script with health-checked **rollback**, GitHub Actions auto-deploy gated on CI and a pinned SSH host key, nightly `pg_dump` backups with a tested restore, and a VM bootstrap script. Verified end to end locally; **not yet run on a real VM** (say so if asked).
+- Wrote the **production deployment tooling** for a $0 Oracle Always Free VM: Docker Compose + Caddy automatic HTTPS, a deploy script with health-checked **rollback**, GitHub Actions auto-deploy gated on CI and a pinned SSH host key, nightly `pg_dump` backups with a tested restore, and a VM bootstrap script. Verified end to end locally, and now **running on a real Oracle VM** (a real laptop sensor is paired to it).
 
 Numbers you can quote (measured 9 Nov 2026): ~5,200 lines of server Python, ~4,600 edge Python, ~3,100 JS, ~1,100 shell; 613 server + 429 edge test functions (about 1,000 tests, including real-browser Playwright tests and a real-Postgres backup/restore drill); 47 HTTP/WebSocket routes; 17 migrations; 192 commits.
 
@@ -152,7 +152,7 @@ Reviews found: Caddy's error log recorded `?token=` URLs and device keys on ever
 Nightly `pg_dump` (plain SQL, restores anywhere including Neon), 14 daily plus weekly retention, 0600 files, atomic writes, a timeout, and a **tested** restore into a scratch database. Photos are deliberately excluded (short-lived, encrypted); the `SNAPSHOT_KEY` must be stored separately or old photos are unreadable.
 
 **Is it running in production?**
-Say it straight: the tooling is complete and verified locally with a full production-stack run, but at the time of writing it has **not yet been deployed to a real VM**. (Update this line once it has.)
+Yes: it runs on an Oracle Always Free Arm VM behind Caddy with automatic HTTPS. Be ready for honest details: Oracle had no free Arm capacity at first, so I wrote a retry script; the deployment guide was written from doing it. Auto-deploy from GitHub is built and tested but only enabled once the five repository secrets are added.
 
 ### What went wrong (good stories)
 - **A mocked test hid a startup crash.** `ha-camera run` crashed on launch because the CLI looked up a class in the wrong module, and every CLI test replaced that function with a fake. An end-to-end review that ran the real path found it. Lesson: mock at the edges, and run the real path once.
@@ -166,7 +166,7 @@ Say it straight: the tooling is complete and verified locally with a full produc
 - **At-most-once** loses an alert after a worker crash mid-send; a stuck-alert sweep makes it visible. I'd add an idempotent outbox with per-channel dedup keys for at-least-once if channels supported it.
 - **Phone as sensor** (browser mic + camera with in-browser models) is designed but not built; it needs HTTPS, which the cloud deployment provides.
 - **Cameras:** fall, lying-still and weapon detection are not measured on real people; a laptop webcam can't see a whole body. Accuracy work needs a feedback loop ("real / false alarm" on each alert) and a public fall dataset.
-- **Deployment:** untested on a real VM (Arm image builds, Oracle firewall, certificate issuance); migrations are forward-only, so rollbacks only cover the application containers.
+- **Deployment:** runs on one free VM with no redundancy; the no-card fallback is untested; migrations are forward-only, so rollbacks only cover the application containers.
 
 ---
 
