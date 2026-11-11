@@ -2,6 +2,8 @@
 
 Everything here is true of the code in this repo. If you can't explain a line below in your own words, open the file it points to before the interview.
 
+Study plan, file reading order, concept glossary and 25 self-test questions: [interview-study-guide.md](interview-study-guide.md).
+
 ---
 
 ## 1. Resume bullets (pick 3–4)
